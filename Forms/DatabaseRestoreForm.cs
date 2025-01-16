@@ -3,11 +3,29 @@ using System.Windows.Forms;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
+using System.Text.Json;
 
 namespace DevToolbox.Forms
 {
+    public class DatabaseRestoreConfig
+    {
+        public string Username { get; set; }
+        public string Password { get; set; }
+        public string Database { get; set; }
+        public string SqlFile { get; set; }
+        public string MySqlPath { get; set; }
+        public string Host { get; set; }
+        public string Port { get; set; }
+    }
+
     public partial class DatabaseRestoreForm : Form
     {
+        private readonly string configPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "DevToolbox",
+            "db_restore_config.json"
+        );
+
         private TextBox txtIp;
         private TextBox txtPort;
         private TextBox txtUsername;
@@ -23,6 +41,7 @@ namespace DevToolbox.Forms
         public DatabaseRestoreForm()
         {
             InitializeComponent();
+            LoadConfig();
         }
 
         private void InitializeComponent()
@@ -43,7 +62,6 @@ namespace DevToolbox.Forms
             };
             txtIp = new TextBox
             {
-                Text = "localhost",
                 Location = new System.Drawing.Point(130, 20),
                 Size = new System.Drawing.Size(200, 23)
             };
@@ -57,7 +75,6 @@ namespace DevToolbox.Forms
             };
             txtPort = new TextBox
             {
-                Text = "3306",
                 Location = new System.Drawing.Point(130, 60),
                 Size = new System.Drawing.Size(200, 23)
             };
@@ -199,6 +216,72 @@ namespace DevToolbox.Forms
             }
         }
 
+        private void LoadConfig()
+        {
+            try
+            {
+                if (File.Exists(configPath))
+                {
+                    var json = File.ReadAllText(configPath);
+                    var config = JsonSerializer.Deserialize<DatabaseRestoreConfig>(json);
+                    
+                    // 设置默认值
+                    txtIp.Text = !string.IsNullOrEmpty(config.Host) ? config.Host : "127.0.0.1";
+                    txtPort.Text = !string.IsNullOrEmpty(config.Port) ? config.Port : "3306";
+                    txtUsername.Text = config.Username ?? "";
+                    txtPassword.Text = config.Password ?? "";
+                    txtDatabase.Text = config.Database ?? "";
+                    txtSelectedFile.Text = config.SqlFile ?? "";
+                    txtMySqlPath.Text = config.MySqlPath ?? @"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe";
+                }
+                else
+                {
+                    // 设置默认值
+                    txtIp.Text = "127.0.0.1";
+                    txtPort.Text = "3306";
+                    txtMySqlPath.Text = @"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe";
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"加载配置失败: {ex.Message}");
+                // 使用默认值
+                txtIp.Text = "127.0.0.1";
+                txtPort.Text = "3306";
+                txtMySqlPath.Text = @"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe";
+            }
+        }
+
+        private void SaveConfig()
+        {
+            try
+            {
+                var config = new DatabaseRestoreConfig
+                {
+                    Username = txtUsername.Text,
+                    Password = txtPassword.Text,
+                    Database = txtDatabase.Text,
+                    SqlFile = txtSelectedFile.Text,
+                    MySqlPath = txtMySqlPath.Text,
+                    Host = txtIp.Text,
+                    Port = txtPort.Text
+                };
+
+                var directory = Path.GetDirectoryName(configPath);
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(configPath, json);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"保存配置失败: {ex.Message}");
+            }
+        }
+
         private async void BtnRestore_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrEmpty(txtSelectedFile.Text))
@@ -221,6 +304,9 @@ namespace DevToolbox.Forms
 
             try
             {
+                // 保存当前配置
+                SaveConfig();
+
                 // 获取SQL文件大小用于计算进度
                 var fileInfo = new FileInfo(txtSelectedFile.Text);
                 long totalSize = fileInfo.Length;
@@ -233,7 +319,7 @@ namespace DevToolbox.Forms
                 
                 // 构建命令，使用标准格式，密码用引号包裹
                 string command = $"cd /d \"{mysqlDir}\" && mysql -h {txtIp.Text} -P {txtPort.Text} -u {txtUsername.Text} -p\"{txtPassword.Text}\" {txtDatabase.Text} < \"{txtSelectedFile.Text}\"";
-
+                Console.WriteLine(command);
                 // 创建取消令牌
                 using (var cts = new System.Threading.CancellationTokenSource())
                 {
@@ -341,6 +427,12 @@ namespace DevToolbox.Forms
                 size = size / 1024;
             }
             return $"{size:F2} {sizes[order]}";
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            SaveConfig();
         }
     }
 } 
