@@ -9,9 +9,28 @@ using DevToolbox.Models;
 using DevToolbox.Utils;
 using System.Text;
 using System.IO;
+using System.Diagnostics;
+using System.Threading;
+using System.IO.Compression;
 
 namespace DevToolbox.Forms
 {
+    // 添加扩展方法类
+    public static class ControlExtensions
+    {
+        public static async Task InvokeAsync(this Control control, Action action)
+        {
+            if (control.InvokeRequired)
+            {
+                await Task.Run(() => control.Invoke(action));
+            }
+            else
+            {
+                action();
+            }
+        }
+    }
+
     public class DockerForm : Form
     {
         private ListView listViewContainers;
@@ -22,13 +41,31 @@ namespace DevToolbox.Forms
         public DockerForm(SshClient client)
         {
             sshClient = client;
+            
+            // 获取连接信息
+            var connectionInfo = sshClient.ConnectionInfo;
+            var host = connectionInfo.Host;
+            var port = connectionInfo.Port;
+            var username = connectionInfo.Username;
+
+            // 从已保存的配置中查找当前连接的服务器名称
+            var configs = ConfigManager.LoadSSHConfigs();
+            var currentConfig = configs.FirstOrDefault(c => 
+                c.Host == host && 
+                c.Port == port && 
+                c.Username == username);
+
+            // 设置窗口标题
+            this.Text = currentConfig != null
+                ? $"Docker Containers - {currentConfig.Name} ({host}:{port})"
+                : $"Docker Containers - {host}:{port}";
+
             InitializeUI();
             LoadContainers();
         }
 
         private void InitializeUI()
         {
-            this.Text = "Docker Containers";
             this.Size = new System.Drawing.Size(800, 600);
             this.StartPosition = FormStartPosition.CenterScreen;
 
@@ -168,6 +205,264 @@ namespace DevToolbox.Forms
                 }
             });
 
+            var buildDevItem = new ToolStripMenuItem("打包Dev", null, (s, e) =>
+            {
+                string containerId = GetSelectedContainerId();
+                if (!string.IsNullOrEmpty(containerId))
+                {
+                    ExecuteBuild(containerId, "staging");
+                }
+            });
+
+            var buildProdItem = new ToolStripMenuItem("打包Prod", null, (s, e) =>
+            {
+                string containerId = GetSelectedContainerId();
+                if (!string.IsNullOrEmpty(containerId))
+                {
+                    ExecuteBuild(containerId, "prod");
+                }
+            });
+
+            var deployDevItem = new ToolStripMenuItem("开发环境部署", null, async (s, e) =>
+            {
+                string containerId = GetSelectedContainerId();
+                if (!string.IsNullOrEmpty(containerId))
+                {
+                    await Deploy(containerId, "dev");
+                }
+            });
+
+            var deployProdItem = new ToolStripMenuItem("生产环境部署", null, async (s, e) =>
+            {
+                string containerId = GetSelectedContainerId();
+                if (!string.IsNullOrEmpty(containerId))
+                {
+                    await Deploy(containerId, "prod");
+                }
+            });
+
+            var buildAndDeployDevItem = new ToolStripMenuItem("开发环境打包及部署", null, async (s, e) =>
+            {
+                string containerId = GetSelectedContainerId();
+                if (!string.IsNullOrEmpty(containerId))
+                {
+                    // 先执行打包
+                    var buildCommand = $"docker exec {containerId} yarn build:staging";
+                    var cmd = sshClient.CreateCommand(buildCommand);
+                    
+                    // 创建日志窗口
+                    Form logForm = new Form
+                    {
+                        Text = $"Build Logs - staging",
+                        Size = new System.Drawing.Size(800, 600),
+                        StartPosition = FormStartPosition.CenterParent
+                    };
+
+                    RichTextBox logBox = new RichTextBox
+                    {
+                        Dock = DockStyle.Fill,
+                        ReadOnly = true,
+                        BackColor = Color.Black,
+                        ForeColor = Color.LightGreen,
+                        Font = new Font("Consolas", 10F),
+                        Multiline = true,
+                        ScrollBars = RichTextBoxScrollBars.Both
+                    };
+
+                    logForm.Controls.Add(logBox);
+                    logForm.Show();
+
+                    try 
+                    {
+                        var asyncResult = cmd.BeginExecute();
+                        
+                        using (var reader = new StreamReader(cmd.OutputStream))
+                        using (var errorReader = new StreamReader(cmd.ExtendedOutputStream))
+                        {
+                            while (!asyncResult.IsCompleted || !reader.EndOfStream || !errorReader.EndOfStream)
+                            {
+                                if (!reader.EndOfStream)
+                                {
+                                    string line = await reader.ReadLineAsync();
+                                    if (!string.IsNullOrEmpty(line))
+                                    {
+                                        await logBox.InvokeAsync(() =>
+                                        {
+                                            logBox.AppendText(line + Environment.NewLine);
+                                            logBox.ScrollToCaret();
+                                        });
+                                    }
+                                }
+
+                                if (!errorReader.EndOfStream)
+                                {
+                                    string errorLine = await errorReader.ReadLineAsync();
+                                    if (!string.IsNullOrEmpty(errorLine))
+                                    {
+                                        await logBox.InvokeAsync(() =>
+                                        {
+                                            logBox.SelectionColor = Color.Red;
+                                            logBox.AppendText(errorLine + Environment.NewLine);
+                                            logBox.SelectionColor = logBox.ForeColor;
+                                            logBox.ScrollToCaret();
+                                        });
+                                    }
+                                }
+
+                                await Task.Delay(100);
+                            }
+                        }
+
+                        cmd.EndExecute(asyncResult);
+
+                        if (cmd.ExitStatus == 0)
+                        {
+                            await logBox.InvokeAsync(() =>
+                            {
+                                logBox.SelectionColor = Color.Green;
+                                logBox.AppendText("\n\n构建成功完成！\n");
+                                logBox.SelectionColor = logBox.ForeColor;
+                            });
+                            
+                            // 关闭日志窗口
+                            await logForm.InvokeAsync(() => logForm.Close());
+                            
+                            // 打包成功后，直接调用部署方法
+                            await DeployDev(containerId);
+                        }
+                        else
+                        {
+                            await logBox.InvokeAsync(() =>
+                            {
+                                logBox.SelectionColor = Color.Red;
+                                logBox.AppendText($"\n\n构建失败，退出代码: {cmd.ExitStatus}\n");
+                                logBox.SelectionColor = logBox.ForeColor;
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        await logBox.InvokeAsync(() =>
+                        {
+                            logBox.SelectionColor = Color.Red;
+                            logBox.AppendText($"\n\n执行命令时发生错误: {ex.Message}\n");
+                            logBox.SelectionColor = logBox.ForeColor;
+                        });
+                    }
+                }
+            });
+
+            var buildAndDeployProdItem = new ToolStripMenuItem("生产环境打包及部署", null, async (s, e) =>
+            {
+                string containerId = GetSelectedContainerId();
+                if (!string.IsNullOrEmpty(containerId))
+                {
+                    // 先执行打包
+                    var buildCommand = $"docker exec {containerId} yarn build:prod";
+                    var cmd = sshClient.CreateCommand(buildCommand);
+                    
+                    // 创建日志窗口
+                    Form logForm = new Form
+                    {
+                        Text = $"Build Logs - prod",
+                        Size = new System.Drawing.Size(800, 600),
+                        StartPosition = FormStartPosition.CenterParent
+                    };
+
+                    RichTextBox logBox = new RichTextBox
+                    {
+                        Dock = DockStyle.Fill,
+                        ReadOnly = true,
+                        BackColor = Color.Black,
+                        ForeColor = Color.LightGreen,
+                        Font = new Font("Consolas", 10F),
+                        Multiline = true,
+                        ScrollBars = RichTextBoxScrollBars.Both
+                    };
+
+                    logForm.Controls.Add(logBox);
+                    logForm.Show();
+
+                    try 
+                    {
+                        var asyncResult = cmd.BeginExecute();
+                        
+                        using (var reader = new StreamReader(cmd.OutputStream))
+                        using (var errorReader = new StreamReader(cmd.ExtendedOutputStream))
+                        {
+                            while (!asyncResult.IsCompleted || !reader.EndOfStream || !errorReader.EndOfStream)
+                            {
+                                if (!reader.EndOfStream)
+                                {
+                                    string line = await reader.ReadLineAsync();
+                                    if (!string.IsNullOrEmpty(line))
+                                    {
+                                        await logBox.InvokeAsync(() =>
+                                        {
+                                            logBox.AppendText(line + Environment.NewLine);
+                                            logBox.ScrollToCaret();
+                                        });
+                                    }
+                                }
+
+                                if (!errorReader.EndOfStream)
+                                {
+                                    string errorLine = await errorReader.ReadLineAsync();
+                                    if (!string.IsNullOrEmpty(errorLine))
+                                    {
+                                        await logBox.InvokeAsync(() =>
+                                        {
+                                            logBox.SelectionColor = Color.Red;
+                                            logBox.AppendText(errorLine + Environment.NewLine);
+                                            logBox.SelectionColor = logBox.ForeColor;
+                                            logBox.ScrollToCaret();
+                                        });
+                                    }
+                                }
+
+                                await Task.Delay(100);
+                            }
+                        }
+
+                        cmd.EndExecute(asyncResult);
+
+                        if (cmd.ExitStatus == 0)
+                        {
+                            await logBox.InvokeAsync(() =>
+                            {
+                                logBox.SelectionColor = Color.Green;
+                                logBox.AppendText("\n\n构建成功完成！\n");
+                                logBox.SelectionColor = logBox.ForeColor;
+                            });
+                            
+                            // 关闭日志窗口
+                            await logForm.InvokeAsync(() => logForm.Close());
+                            
+                            // 打包成功后，直接调用部署方法
+                            await DeployProd(containerId);
+                        }
+                        else
+                        {
+                            await logBox.InvokeAsync(() =>
+                            {
+                                logBox.SelectionColor = Color.Red;
+                                logBox.AppendText($"\n\n构建失败，退出代码: {cmd.ExitStatus}\n");
+                                logBox.SelectionColor = logBox.ForeColor;
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        await logBox.InvokeAsync(() =>
+                        {
+                            logBox.SelectionColor = Color.Red;
+                            logBox.AppendText($"\n\n执行命令时发生错误: {ex.Message}\n");
+                            logBox.SelectionColor = logBox.ForeColor;
+                        });
+                    }
+                }
+            });
+
             var downloadDBItem = new ToolStripMenuItem("下载数据库", null, (s, e) =>
             {
                 string containerId = GetSelectedContainerId();
@@ -183,6 +478,15 @@ namespace DevToolbox.Forms
                 stopItem,
                 restartItem,
                 new ToolStripSeparator(),
+                buildDevItem,
+                buildProdItem,
+                new ToolStripSeparator(),
+                deployDevItem,
+                deployProdItem,
+                new ToolStripSeparator(),
+                buildAndDeployDevItem,
+                buildAndDeployProdItem,
+                new ToolStripSeparator(),
                 logsItem,
                 inspectItem,
                 downloadDBItem
@@ -192,11 +496,20 @@ namespace DevToolbox.Forms
             containerContextMenu.Opening += (s, e) =>
             {
                 string status = GetSelectedContainerStatus();
+                string image = GetSelectedContainerImage()?.ToLower() ?? "";
+                
                 startItem.Enabled = status?.Contains("Exited") ?? false;
                 stopItem.Enabled = status?.Contains("Up") ?? false;
                 restartItem.Enabled = status?.Contains("Up") ?? false;
-                string image = GetSelectedContainerImage()?.ToLower() ?? "";
                 downloadDBItem.Visible = image.Contains("mysql");
+                
+                // 只有运行中的容器才能执行打包和部署
+                buildDevItem.Enabled = status?.Contains("Up") ?? false;
+                buildProdItem.Enabled = status?.Contains("Up") ?? false;
+                deployDevItem.Enabled = status?.Contains("Up") ?? false;
+                deployProdItem.Enabled = status?.Contains("Up") ?? false;
+                buildAndDeployDevItem.Enabled = status?.Contains("Up") ?? false;
+                buildAndDeployProdItem.Enabled = status?.Contains("Up") ?? false;
             };
         }
 
@@ -730,6 +1043,464 @@ namespace DevToolbox.Forms
             }
         }
 
+        private async void ExecuteBuild(string containerId, string env)
+        {
+            try
+            {
+                // 创建日志窗口
+                Form logForm = new Form
+                {
+                    Text = $"Build Logs - {env}",
+                    Size = new System.Drawing.Size(800, 600),
+                    StartPosition = FormStartPosition.CenterParent
+                };
+
+                RichTextBox logBox = new RichTextBox
+                {
+                    Dock = DockStyle.Fill,
+                    ReadOnly = true,
+                    BackColor = Color.Black,
+                    ForeColor = Color.LightGreen,
+                    Font = new Font("Consolas", 10F),
+                    Multiline = true,
+                    ScrollBars = RichTextBoxScrollBars.Both
+                };
+
+                logForm.Controls.Add(logBox);
+                logForm.Show();
+
+                // 根据环境选择正确的构建命令
+                string buildCommand = env == "staging" ? "build:staging" : "build:prod";
+                string command = $"docker exec {containerId} yarn {buildCommand}";
+
+                try
+                {
+                    var cmd = sshClient.CreateCommand(command);
+                    
+                    // 异步执行命令
+                    _ = Task.Run(async () =>
+                    {
+                        try 
+                        {
+                            // 开始执行命令
+                            var asyncResult = cmd.BeginExecute();
+                            
+                            // 创建读取器来读取输出流
+                            using (var reader = new StreamReader(cmd.OutputStream))
+                            using (var errorReader = new StreamReader(cmd.ExtendedOutputStream))
+                            {
+                                while (!asyncResult.IsCompleted || !reader.EndOfStream || !errorReader.EndOfStream)
+                                {
+                                    // 读取标准输出
+                                    if (!reader.EndOfStream)
+                                    {
+                                        string line = await reader.ReadLineAsync();
+                                        if (!string.IsNullOrEmpty(line))
+                                        {
+                                            await logBox.InvokeAsync(() =>
+                                            {
+                                                logBox.AppendText(line + Environment.NewLine);
+                                                logBox.ScrollToCaret();
+                                            });
+                                        }
+                                    }
+
+                                    // 读取错误输出
+                                    if (!errorReader.EndOfStream)
+                                    {
+                                        string errorLine = await errorReader.ReadLineAsync();
+                                        if (!string.IsNullOrEmpty(errorLine))
+                                        {
+                                            await logBox.InvokeAsync(() =>
+                                            {
+                                                logBox.SelectionColor = Color.Red;
+                                                logBox.AppendText(errorLine + Environment.NewLine);
+                                                logBox.SelectionColor = logBox.ForeColor;
+                                                logBox.ScrollToCaret();
+                                            });
+                                        }
+                                    }
+
+                                    await Task.Delay(100);
+                                }
+                            }
+
+                            // 等待命令完成
+                            cmd.EndExecute(asyncResult);
+
+                            // 检查命令执行结果
+                            if (cmd.ExitStatus != 0)
+                            {
+                                await logBox.InvokeAsync(() =>
+                                {
+                                    logBox.SelectionColor = Color.Red;
+                                    logBox.AppendText($"\n\n构建失败，退出代码: {cmd.ExitStatus}\n");
+                                    logBox.SelectionColor = logBox.ForeColor;
+                                });
+                            }
+                            else
+                            {
+                                await logBox.InvokeAsync(() =>
+                                {
+                                    logBox.SelectionColor = Color.Green;
+                                    logBox.AppendText("\n\n构建成功完成！\n");
+                                    logBox.SelectionColor = logBox.ForeColor;
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            await logBox.InvokeAsync(() =>
+                            {
+                                logBox.SelectionColor = Color.Red;
+                                logBox.AppendText($"\n\n执行命令时发生错误: {ex.Message}\n");
+                                logBox.SelectionColor = logBox.ForeColor;
+                            });
+                        }
+                    });
+
+                    // 窗口关闭时取消命令
+                    logForm.FormClosing += (s, e) =>
+                    {
+                        try
+                        {
+                            cmd.CancelAsync();
+                        }
+                        catch { }
+                    };
+                }
+                catch (Exception ex)
+                {
+                    await logBox.InvokeAsync(() =>
+                    {
+                        logBox.AppendText($"\n\n执行命令失败: {ex.Message}");
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"执行打包时发生错误:\n{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private async Task DeployDev(string containerId)
+        {
+            await Deploy(containerId, "dev");
+        }
+
+        private async Task DeployProd(string containerId)
+        {
+            await Deploy(containerId, "prod");
+        }
+
+        private async Task Deploy(string containerId, string environment)
+        {
+            try
+            {
+                // 获取容器名称
+                var command = sshClient.CreateCommand($"docker inspect --format='{{{{.Name}}}}' {containerId}");
+                var containerName = command.Execute().Trim().TrimStart('/');
+
+                // 加载部署配置
+                var deployConfigs = ConfigManager.LoadDeployConfigs();
+                var lastDeployConfig = deployConfigs.FirstOrDefault(c => 
+                    c.ContainerId == containerId && 
+                    c.Environment == environment);
+
+                // 创建部署配置窗口
+                using (var deployForm = new Form())
+                {
+                    deployForm.Text = environment == "dev" 
+                        ? $"开发环境部署配置 - {containerName}"
+                        : $"生产环境部署配置 - {containerName}";
+                    deployForm.Size = new Size(500, 320);
+                    deployForm.StartPosition = FormStartPosition.CenterParent;
+                    deployForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    deployForm.MaximizeBox = false;
+                    deployForm.MinimizeBox = false;
+
+                    // SSH服务器选择
+                    var lblServer = new Label { Text = "目标服务器:", Location = new Point(20, 20), AutoSize = true };
+                    var cboServer = new ComboBox 
+                    { 
+                        Location = new Point(20, 45), 
+                        Size = new Size(440, 23),
+                        DropDownStyle = ComboBoxStyle.DropDownList
+                    };
+
+                    // 本地目录选择
+                    var lblLocalPath = new Label { Text = "本地目录:", Location = new Point(20, 80), AutoSize = true };
+                    var txtLocalPath = new TextBox 
+                    { 
+                        Location = new Point(20, 105), 
+                        Size = new Size(350, 23),
+                        Text = lastDeployConfig?.LocalPath ?? "" // 填充上次的本地目录
+                    };
+
+                    // SSH目录输入
+                    var lblRemotePath = new Label { Text = "远程目录:", Location = new Point(20, 140), AutoSize = true };
+                    var txtRemotePath = new TextBox 
+                    { 
+                        Location = new Point(20, 165), 
+                        Size = new Size(440, 23),
+                        Text = lastDeployConfig?.RemotePath ?? "/var/www/html/dist" // 填充上次的远程目录
+                    };
+
+                    // 加载SSH配置
+                    var sshConfigs = ConfigManager.LoadSSHConfigs();
+                    var allDeployConfigs = ConfigManager.LoadDeployConfigs();
+
+                    // 创建服务器选择改变事件处理器
+                    cboServer.SelectedIndexChanged += (s, e) =>
+                    {
+                        if (cboServer.SelectedItem != null)
+                        {
+                            var selectedServer = ((SSHConfigItem)cboServer.SelectedItem).Config;
+                            // 查找匹配的部署配置
+                            var matchingConfig = allDeployConfigs.FirstOrDefault(c => 
+                                c.ContainerId == containerId && 
+                                c.Environment == environment &&
+                                c.ServerHost == selectedServer.Host &&
+                                c.ServerPort == selectedServer.Port);
+
+                            if (matchingConfig != null)
+                            {
+                                txtLocalPath.Text = matchingConfig.LocalPath;
+                                txtRemotePath.Text = matchingConfig.RemotePath;
+                            }
+                            else
+                            {
+                                // 如果没有找到匹配的配置，设置默认值
+                                var command = sshClient.CreateCommand($"docker inspect --format='{{{{.Config.WorkingDir}}}}' {containerId}");
+                                var workDir = command.Execute().Trim();
+                                
+                                // 设置本地目录
+                                txtLocalPath.Text = $"{workDir}/dist";
+                                
+                                // 根据环境设置不同的远程目录
+                                if (environment == "dev")
+                                {
+                                    txtRemotePath.Text = "/var/www/html/dev";
+                                }
+                                else if (environment == "prod")
+                                {
+                                    txtRemotePath.Text = "/var/www/html/dist";
+                                }
+                            }
+                        }
+                    };
+
+                    foreach (var config in sshConfigs)
+                    {
+                        var item = new SSHConfigItem(config);
+                        cboServer.Items.Add(item);
+                        
+                        // 如果有上次部署的配置，选中对应的服务器
+                        if (lastDeployConfig != null && 
+                            config.Host == lastDeployConfig.ServerHost && 
+                            config.Port == lastDeployConfig.ServerPort)
+                        {
+                            cboServer.SelectedItem = item;
+                        }
+                    }
+
+                    // 如果没有找到上次的服务器，选择第一个
+                    if (cboServer.SelectedIndex == -1 && cboServer.Items.Count > 0)
+                    {
+                        cboServer.SelectedIndex = 0;
+                    }
+
+                    var btnBrowse = new Button { Text = "浏览", Location = new Point(380, 104), Size = new Size(80, 25) };
+                    
+                    btnBrowse.Click += (s, e) =>
+                    {
+                        using (var folderDialog = new FolderBrowserDialog())
+                        {
+                            if (!string.IsNullOrEmpty(txtLocalPath.Text))
+                            {
+                                folderDialog.SelectedPath = txtLocalPath.Text;
+                            }
+                            if (folderDialog.ShowDialog() == DialogResult.OK)
+                            {
+                                txtLocalPath.Text = folderDialog.SelectedPath;
+                            }
+                        }
+                    };
+
+                    // 上传按钮
+                    var btnUpload = new Button
+                    {
+                        Text = "开始上传",
+                        Location = new Point(200, 220),
+                        Size = new Size(100, 30)
+                    };
+
+                    btnUpload.Click += async (s, e) =>
+                    {
+                        if (cboServer.SelectedItem == null)
+                        {
+                            MessageBox.Show("请选择目标服务器", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(txtLocalPath.Text) || string.IsNullOrWhiteSpace(txtRemotePath.Text))
+                        {
+                            MessageBox.Show("请填写本地目录和远程目录", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        var selectedConfig = ((SSHConfigItem)cboServer.SelectedItem).Config;
+                        
+                        // 保存当前配置
+                        var deployConfig = new DeployConfig
+                        {
+                            ContainerId = containerId,
+                            ContainerName = containerName,
+                            Environment = environment,
+                            ServerName = selectedConfig.Name,
+                            ServerHost = selectedConfig.Host,
+                            ServerPort = selectedConfig.Port,
+                            LocalPath = txtLocalPath.Text,
+                            RemotePath = txtRemotePath.Text,
+                            LastUsed = DateTime.Now
+                        };
+                        ConfigManager.SaveDeployConfig(deployConfig);
+
+                        deployForm.Close();
+                        await UploadFiles(containerId, txtLocalPath.Text, txtRemotePath.Text, selectedConfig);
+                    };
+
+                    deployForm.Controls.AddRange(new Control[] {
+                        lblServer, cboServer,
+                        lblLocalPath, txtLocalPath, btnBrowse,
+                        lblRemotePath, txtRemotePath,
+                        btnUpload
+                    });
+
+                    deployForm.ShowDialog();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"部署过程中发生错误:\n{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // 用于ComboBox显示的SSH配置项类
+        private class SSHConfigItem
+        {
+            public SSHConfig Config { get; }
+
+            public SSHConfigItem(SSHConfig config)
+            {
+                Config = config;
+            }
+
+            public override string ToString()
+            {
+                return $"{Config.Name} ({Config.Host}:{Config.Port})";
+            }
+        }
+
+        private async Task UploadFiles(string containerId, string localPath, string remotePath, SSHConfig targetServer)
+        {
+            SshClient targetSshClient = null;
+            try
+            {
+                // 连接目标服务器
+                targetSshClient = new SshClient(targetServer.Host, targetServer.Port, targetServer.Username, targetServer.Password);
+                targetSshClient.Connect();
+
+                using (var uploadForm = new LoadingForm(this, "正在上传文件...", true))
+                {
+                    uploadForm.Show();
+                    Application.DoEvents();
+
+                    try
+                    {
+                        // 压缩本地文件
+                        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+                        Directory.CreateDirectory(tempDir);
+                        var zipPath = Path.Combine(tempDir, "dist.zip");
+                        
+                        ZipFile.CreateFromDirectory(localPath, zipPath);
+
+                        // 获取文件大小
+                        var fileInfo = new FileInfo(zipPath);
+                        var totalSize = fileInfo.Length;
+
+                        // 上传到远程主机的临时目录
+                        using (var scpClient = new ScpClient(targetSshClient.ConnectionInfo))
+                        {
+                            scpClient.Connect();
+
+                            // 设置进度回调
+                            scpClient.Uploading += (sender, e) =>
+                            {
+                                uploadForm.UpdateProgress(e.Uploaded, totalSize);
+                            };
+
+                            // 上传文件
+                            using (var fs = new FileStream(zipPath, FileMode.Open))
+                            {
+                                await Task.Run(() => scpClient.Upload(fs, "/tmp/dist.zip"));
+                            }
+
+                            scpClient.Disconnect();
+                        }
+
+                        // 在目标服务器上解压文件
+                        var cmd = targetSshClient.CreateCommand($@"
+                            mkdir -p {remotePath} &&
+                            rm -rf {remotePath}/* &&
+                            unzip -o /tmp/dist.zip -d {remotePath}/ &&
+                            rm /tmp/dist.zip
+                        ");
+                        
+                        var result = cmd.Execute();
+                        var error = cmd.Error;
+
+                        if (!string.IsNullOrEmpty(error))
+                        {
+                            throw new Exception($"在目标服务器上解压文件失败: {error}");
+                        }
+
+                        uploadForm.Close();
+                        MessageBox.Show("部署成功！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                        // 清理临时目录
+                        try
+                        {
+                            if (Directory.Exists(tempDir))
+                            {
+                                Directory.Delete(tempDir, true);
+                            }
+                        }
+                        catch { }
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new Exception($"处理文件失败: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"上传文件失败:\n{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (targetSshClient != null)
+                {
+                    if (targetSshClient.IsConnected)
+                    {
+                        targetSshClient.Disconnect();
+                    }
+                    targetSshClient.Dispose();
+                }
+            }
+        }
+
         private void InitializeComponent()
         {
 
@@ -738,11 +1509,7 @@ namespace DevToolbox.Forms
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e);
-            if (sshClient != null && sshClient.IsConnected)
-            {
-                sshClient.Disconnect();
-                sshClient.Dispose();
-            }
+            // 不在这里处理SSH客户端的断开和释放，因为它是由父窗口管理的
         }
     }
 } 
