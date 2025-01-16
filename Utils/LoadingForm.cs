@@ -67,22 +67,29 @@ namespace DevToolbox.Utils
             this.Controls.Add(progressBar);
         }
 
-        public void UpdateProgress(long bytesTransferred, long totalBytes)
+        public void UpdateProgress(long current, long total, string customMessage = null)
         {
             if (lblProgress != null && progressBar != null)
             {
                 if (this.InvokeRequired)
                 {
-                    this.Invoke(new Action(() => UpdateProgress(bytesTransferred, totalBytes)));
+                    this.Invoke(new Action(() => UpdateProgress(current, total, customMessage)));
                     return;
                 }
 
-                double percentage = (double)bytesTransferred / totalBytes * 100;
+                double percentage = (double)current / total * 100;
                 progressBar.Value = (int)percentage;
 
-                string speed = FormatSpeed(bytesTransferred);
-                string size = FormatSize(bytesTransferred) + " / " + FormatSize(totalBytes);
-                lblProgress.Text = $"{percentage:F1}% ({size}) - {speed}/s";
+                if (customMessage != null)
+                {
+                    lblProgress.Text = customMessage;
+                }
+                else
+                {
+                    string speed = FormatSpeed(current);
+                    string size = FormatSize(current) + " / " + FormatSize(total);
+                    lblProgress.Text = $"{percentage:F1}% ({size}) - {speed}/s";
+                }
             }
         }
 
@@ -122,6 +129,20 @@ namespace DevToolbox.Utils
                 CreateParams cp = base.CreateParams;
                 cp.ClassStyle |= 0x20000;
                 return cp;
+            }
+        }
+
+        public string Message
+        {
+            get { return lblMessage.Text; }
+            set
+            {
+                if (this.InvokeRequired)
+                {
+                    this.Invoke(new Action(() => Message = value));
+                    return;
+                }
+                lblMessage.Text = value;
             }
         }
     }
