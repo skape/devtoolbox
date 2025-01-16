@@ -490,192 +490,233 @@ namespace DevToolbox.Forms
                     LastUsed = DateTime.Now
                 };
 
-                // 获取数据库列表
-                try
+                // 创建加载窗口
+                using (var loadingForm = new LoadingForm(this, "正在连接数据库..."))
                 {
-                    using (var shellStream = sshClient.CreateShellStream("xterm", 80, 24, 800, 600, 1024))
+                    try
                     {
-                        // 进入容器
-                        shellStream.WriteLine($"docker exec -it {containerId} sh");
-                        await Task.Delay(1000); // 等待shell准备就绪
-                        var result = shellStream.Read();
-                        Console.WriteLine($"Enter container result: {result}"); // 调试输出
+                        loadingForm.Show();
+                        Application.DoEvents();
 
-                        // 分两步设置环境变量
-                        shellStream.WriteLine($"export MYSQL_PWD='{config.Password}'");
-                        await Task.Delay(500);
-                        result = shellStream.Read();
-                        Console.WriteLine($"Export result: {result}"); // 调试输出
-
-                        shellStream.WriteLine("echo $MYSQL_PWD"); // 验证环境变量
-                        await Task.Delay(500);
-                        result = shellStream.Read();
-                        Console.WriteLine($"Echo pwd result: {result}"); // 调试输出
-
-                        // 执行MySQL命令
-                        shellStream.WriteLine($"mysql -u{config.Username} -e 'SHOW DATABASES;'");
-                        await Task.Delay(1000);
-                        result = shellStream.Read();
-                        Console.WriteLine($"MySQL result: {result}"); // 调试输出
-
-                        if (result.Contains("Access denied"))
+                        using (var shellStream = sshClient.CreateShellStream("xterm", 80, 24, 800, 600, 1024))
                         {
-                            MessageBox.Show("MySQL登录失败，请检查用户名和密码", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            return;
-                        }
+                            // 进入容器
+                            shellStream.WriteLine($"docker exec -it {containerId} sh");
+                            await Task.Delay(1000); // 等待shell准备就绪
+                            var result = shellStream.Read();
+                            Console.WriteLine($"Enter container result: {result}"); // 调试输出
 
-                        // 登录成功后保存配置
-                        ConfigManager.SaveMySQLConfig(config);
+                            // 分两步设置环境变量
+                            shellStream.WriteLine($"export MYSQL_PWD='{config.Password}'");
+                            await Task.Delay(500);
+                            result = shellStream.Read();
+                            Console.WriteLine($"Export result: {result}"); // 调试输出
 
-                        // 解析数据库列表
-                        var databases = result.Split('\n')
-                            .Where(line => !string.IsNullOrWhiteSpace(line))
-                            .Where(line => !line.StartsWith("mysql") &&  // 过滤掉命令行
-                                          !line.StartsWith("-[") &&      // 过滤掉会话信息
-                                          !line.StartsWith("#") &&       // 过滤掉提示符
-                                          !line.Contains("SHOW DATABASES") && // 过滤掉命令
-                                          !line.Contains("rows in set") &&    // 过滤掉结果统计
-                                          !line.Contains("Database"))         // 过滤掉表头
-                            .Select(db => db.Trim()
-                                .Replace("|", "")     // 删除竖线
-                                .Replace("-", "")     // 删除横线
-                                .Replace("+", "")     // 删除加号
-                                .Trim())             // 再次去除可能的空格
-                            .Where(db => !string.IsNullOrWhiteSpace(db) && 
-                                        !db.StartsWith("[") &&           // 过滤掉会话信息
-                                        !db.EndsWith("#") &&            // 过滤掉提示符
-                                        !db.Equals("information_schema", StringComparison.OrdinalIgnoreCase) &&  // 过滤系统数据库
-                                        !db.Equals("mysql", StringComparison.OrdinalIgnoreCase) &&
-                                        !db.Equals("performance_schema", StringComparison.OrdinalIgnoreCase) &&
-                                        !db.Equals("sys", StringComparison.OrdinalIgnoreCase))
-                            .ToList();
+                            shellStream.WriteLine("echo $MYSQL_PWD"); // 验证环境变量
+                            await Task.Delay(500);
+                            result = shellStream.Read();
+                            Console.WriteLine($"Echo pwd result: {result}"); // 调试输出
 
-                        Console.WriteLine("Available databases:"); // 调试输出
-                        foreach (var db in databases)
-                        {
-                            Console.WriteLine($"- {db}");
-                        }
+                            // 执行MySQL命令
+                            shellStream.WriteLine($"mysql -u{config.Username} -e 'SHOW DATABASES;'");
+                            await Task.Delay(1000);
+                            result = shellStream.Read();
+                            Console.WriteLine($"MySQL result: {result}"); // 调试输出
 
-                        // 显示数据库选择窗口
-                        using (var dbSelectForm = new Form())
-                        {
-                            dbSelectForm.Text = "选择数据库";
-                            dbSelectForm.Size = new Size(300, 400);
-                            dbSelectForm.StartPosition = FormStartPosition.CenterParent;
-
-                            var listBox = new ListBox
+                            if (result.Contains("Access denied"))
                             {
-                                Dock = DockStyle.Fill,
-                                SelectionMode = SelectionMode.One
-                            };
-                            listBox.Items.AddRange(databases.ToArray());
+                                MessageBox.Show("MySQL登录失败，请检查用户名和密码", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                return;
+                            }
 
-                            var btnSelect = new Button
+                            // 登录成功后保存配置
+                            ConfigManager.SaveMySQLConfig(config);
+
+                            // 解析数据库列表
+                            var databases = result.Split('\n')
+                                .Where(line => !string.IsNullOrWhiteSpace(line))
+                                .Where(line => !line.StartsWith("mysql") &&  // 过滤掉命令行
+                                              !line.StartsWith("-[") &&      // 过滤掉会话信息
+                                              !line.StartsWith("#") &&       // 过滤掉提示符
+                                              !line.Contains("SHOW DATABASES") && // 过滤掉命令
+                                              !line.Contains("rows in set") &&    // 过滤掉结果统计
+                                              !line.Contains("Database"))         // 过滤掉表头
+                                .Select(db => db.Trim()
+                                    .Replace("|", "")     // 删除竖线
+                                    .Replace("-", "")     // 删除横线
+                                    .Replace("+", "")     // 删除加号
+                                    .Trim())             // 再次去除可能的空格
+                                .Where(db => !string.IsNullOrWhiteSpace(db) && 
+                                            !db.StartsWith("[") &&           // 过滤掉会话信息
+                                            !db.EndsWith("#") &&            // 过滤掉提示符
+                                            !db.Equals("information_schema", StringComparison.OrdinalIgnoreCase) &&  // 过滤系统数据库
+                                            !db.Equals("mysql", StringComparison.OrdinalIgnoreCase) &&
+                                            !db.Equals("performance_schema", StringComparison.OrdinalIgnoreCase) &&
+                                            !db.Equals("sys", StringComparison.OrdinalIgnoreCase))
+                                .ToList();
+
+                            Console.WriteLine("Available databases:"); // 调试输出
+                            foreach (var db in databases)
                             {
-                                Text = "下载",
-                                Dock = DockStyle.Bottom
-                            };
+                                Console.WriteLine($"- {db}");
+                            }
 
-                            btnSelect.Click += async (s, e) =>
+                            // 获取完数据库列表后关闭加载窗口
+                            loadingForm.Close();
+
+                            // 显示数据库选择窗口
+                            using (var dbSelectForm = new Form())
                             {
-                                if (listBox.SelectedItem == null) return;
+                                dbSelectForm.Text = "选择数据库";
+                                dbSelectForm.Size = new Size(300, 400);
+                                dbSelectForm.StartPosition = FormStartPosition.CenterParent;
 
-                                var selectedDB = listBox.SelectedItem.ToString().Trim();
-                                using (var saveFileDialog = new SaveFileDialog())
+                                var listBox = new ListBox
                                 {
-                                    saveFileDialog.Filter = "SQL文件|*.sql";
-                                    saveFileDialog.FileName = $"{selectedDB}_{DateTime.Now:yyyyMMdd}.sql";
+                                    Dock = DockStyle.Fill,
+                                    SelectionMode = SelectionMode.One
+                                };
+                                listBox.Items.AddRange(databases.ToArray());
 
-                                    if (saveFileDialog.ShowDialog() == DialogResult.OK)
+                                var btnSelect = new Button
+                                {
+                                    Text = "下载",
+                                    Dock = DockStyle.Bottom
+                                };
+
+                                btnSelect.Click += async (s, e) =>
+                                {
+                                    if (listBox.SelectedItem == null) return;
+
+                                    var selectedDB = listBox.SelectedItem.ToString().Trim();
+                                    using (var saveFileDialog = new SaveFileDialog())
                                     {
-                                        await DumpDatabase(containerId, config, selectedDB, saveFileDialog.FileName);
-                                        dbSelectForm.Close();
-                                    }
-                                }
-                            };
+                                        saveFileDialog.Filter = "SQL文件|*.sql";
+                                        saveFileDialog.FileName = $"{selectedDB}_{DateTime.Now:yyyyMMdd}.sql";
 
-                            dbSelectForm.Controls.AddRange(new Control[] { listBox, btnSelect });
-                            dbSelectForm.ShowDialog();
+                                        if (saveFileDialog.ShowDialog() == DialogResult.OK)
+                                        {
+                                            await DumpDatabase(containerId, config, selectedDB, saveFileDialog.FileName);
+                                            dbSelectForm.Close();
+                                        }
+                                    }
+                                };
+
+                                dbSelectForm.Controls.AddRange(new Control[] { listBox, btnSelect });
+                                dbSelectForm.ShowDialog();
+                            }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"获取数据库列表失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    catch (Exception ex)
+                    {
+                        loadingForm.Close();
+                        MessageBox.Show($"获取数据库列表失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
                 }
             }
         }
 
         private async Task DumpDatabase(string containerId, MySQLConfig config, string database, string localPath)
         {
-            try
+            using (var exportForm = new LoadingForm(this, "正在导出数据库..."))
             {
-                using (var shellStream = sshClient.CreateShellStream("xterm", 80, 24, 800, 600, 1024))
+                try
                 {
-                    var timestamp = DateTime.Now.ToString("yyyyMMdd");
-                    var dockerFilePath = $"/tmp/{database}_{timestamp}.sql";
+                    exportForm.Show();
+                    Application.DoEvents();
 
-                    // 进入容器
-                    shellStream.WriteLine($"docker exec -it {containerId} sh");
-                    await Task.Delay(1000);
-                    var result = shellStream.Read();
-                    Console.WriteLine($"Enter container result: {result}");
-
-                    // 设置环境变量
-                    shellStream.WriteLine($"export MYSQL_PWD='{config.Password}'");
-                    await Task.Delay(500);
-                    result = shellStream.Read();
-                    Console.WriteLine($"Export result: {result}");
-
-                    // 验证环境变量
-                    shellStream.WriteLine("echo $MYSQL_PWD");
-                    await Task.Delay(500);
-                    result = shellStream.Read();
-                    Console.WriteLine($"Echo pwd result: {result}");
-
-                    // 执行mysqldump
-                    shellStream.WriteLine($"mysqldump -u{config.Username} {database} > {dockerFilePath}");
-                    await Task.Delay(2000);
-                    result = shellStream.Read();
-                    Console.WriteLine($"Dump result: {result}");
-
-                    // 从容器复制到主机的临时目录
-                    var hostTempPath = $"/tmp/{database}_{timestamp}.sql";
-                    var copyCommand = sshClient.CreateCommand($"docker cp {containerId}:{dockerFilePath} {hostTempPath}");
-                    copyCommand.Execute();
-
-                    if (!string.IsNullOrEmpty(copyCommand.Error))
+                    using (var shellStream = sshClient.CreateShellStream("xterm", 80, 24, 800, 600, 1024))
                     {
-                        MessageBox.Show($"文件复制失败: {copyCommand.Error}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
+                        var timestamp = DateTime.Now.ToString("yyyyMMdd");
+                        var dockerFilePath = $"/tmp/{database}_{timestamp}.sql";
 
-                    // 使用SCP下载文件到本地
-                    using (var scpClient = new ScpClient(sshClient.ConnectionInfo))
-                    {
-                        scpClient.Connect();
-                        
-                        using (var fileStream = new FileStream(localPath, FileMode.Create))
+                        // 进入容器
+                        shellStream.WriteLine($"docker exec -it {containerId} sh");
+                        await Task.Delay(1000);
+                        var result = shellStream.Read();
+                        Console.WriteLine($"Enter container result: {result}");
+
+                        // 设置环境变量
+                        shellStream.WriteLine($"export MYSQL_PWD='{config.Password}'");
+                        await Task.Delay(500);
+                        result = shellStream.Read();
+                        Console.WriteLine($"Export result: {result}");
+
+                        // 验证环境变量
+                        shellStream.WriteLine("echo $MYSQL_PWD");
+                        await Task.Delay(500);
+                        result = shellStream.Read();
+                        Console.WriteLine($"Echo pwd result: {result}");
+
+                        // 执行mysqldump
+                        shellStream.WriteLine($"mysqldump -u{config.Username} {database} > {dockerFilePath}");
+                        await Task.Delay(2000);
+                        result = shellStream.Read();
+                        Console.WriteLine($"Dump result: {result}");
+
+                        // 从容器复制到主机的临时目录
+                        var hostTempPath = $"/tmp/{database}_{timestamp}.sql";
+                        var copyCommand = sshClient.CreateCommand($"docker cp {containerId}:{dockerFilePath} {hostTempPath}");
+                        copyCommand.Execute();
+
+                        if (!string.IsNullOrEmpty(copyCommand.Error))
                         {
-                            scpClient.Download(hostTempPath, fileStream);
+                            MessageBox.Show($"文件复制失败: {copyCommand.Error}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
                         }
+
+                        // 使用SCP下载文件到本地
+                        using (var downloadForm = new LoadingForm(this, "正在下载数据库...", true))
+                        {
+                            downloadForm.Show();
+                            Application.DoEvents();
+
+                            using (var scpClient = new ScpClient(sshClient.ConnectionInfo))
+                            {
+                                scpClient.Connect();
+                                
+                                // 获取文件大小 - 使用 ls -l 命令
+                                var sizeCommand = sshClient.CreateCommand($"ls -l {hostTempPath} | awk '{{print $5}}'");
+                                var fileSizeStr = sizeCommand.Execute().Trim();
+                                long totalSize;
+                                if (!long.TryParse(fileSizeStr, out totalSize))
+                                {
+                                    // 如果无法获取文件大小，使用一个默认值
+                                    totalSize = 100 * 1024 * 1024; // 假设100MB
+                                }
+
+                                scpClient.Downloading += (sender, e) =>
+                                {
+                                    downloadForm.UpdateProgress(e.Downloaded, totalSize);
+                                };
+
+                                using (var fileStream = new FileStream(localPath, FileMode.Create))
+                                {
+                                    await Task.Run(() => scpClient.Download(hostTempPath, fileStream));
+                                }
+                                
+                                scpClient.Disconnect();
+                            }
+
+                            downloadForm.Close();
+                        }
+
+                        // 清理远程临时文件（容器内和主机上的）
+                        shellStream.WriteLine($"rm {dockerFilePath}");
+                        await Task.Delay(500);
                         
-                        scpClient.Disconnect();
+                        var cleanCommand = sshClient.CreateCommand($"rm {hostTempPath}");
+                        cleanCommand.Execute();
+
+                        exportForm.Close();
+                        MessageBox.Show("数据库导出成功！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
-
-                    // 清理远程临时文件（容器内和主机上的）
-                    shellStream.WriteLine($"rm {dockerFilePath}");
-                    await Task.Delay(500);
-                    
-                    var cleanCommand = sshClient.CreateCommand($"rm {hostTempPath}");
-                    cleanCommand.Execute();
-
-                    MessageBox.Show("数据库导出成功！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"导出过程中发生错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                catch (Exception ex)
+                {
+                    exportForm.Close();
+                    MessageBox.Show($"导出过程中发生错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
         }
 
