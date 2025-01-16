@@ -11,7 +11,7 @@ namespace DevToolbox
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new SSHLoginForm());
+            Application.Run(new MainForm());
         }
     }
 }
