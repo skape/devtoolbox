@@ -145,5 +145,30 @@ namespace DevToolbox.Utils
                 lblMessage.Text = value;
             }
         }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            // 直接执行清理
+            if (lblMessage != null) lblMessage.Dispose();
+            if (progressBar != null) progressBar.Dispose();
+            if (lblProgress != null) lblProgress.Dispose();
+            owner = null;
+        }
+
+        public void CleanUp()
+        {
+            // 直接执行清理
+            if (!IsDisposed)
+            {
+                if (InvokeRequired)
+                {
+                    Invoke(new Action(CleanUp));
+                    return;
+                }
+                Close();
+                Dispose();
+            }
+        }
     }
 } 

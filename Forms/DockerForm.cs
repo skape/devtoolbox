@@ -96,18 +96,18 @@ namespace DevToolbox.Forms
             btnLogs.Click += BtnLogs_Click;
 
             // 添加控件
-            this.Controls.AddRange(new Control[] { 
-                listViewContainers, 
-                btnRefresh, 
-                btnStart, 
-                btnStop, 
-                btnRestart, 
-                btnLogs 
+            this.Controls.AddRange(new Control[] {
+                listViewContainers,
+                btnRefresh,
+                btnStart,
+                btnStop,
+                btnRestart,
+                btnLogs
             });
 
             // 初始化右键菜单
             InitializeContextMenu();
-            
+
             // 为ListView添加右键菜单
             listViewContainers.ContextMenuStrip = containerContextMenu;
 
@@ -118,9 +118,10 @@ namespace DevToolbox.Forms
         private void InitializeContextMenu()
         {
             containerContextMenu = new ContextMenuStrip();
-            
+
             // 添加菜单项
-            var startItem = new ToolStripMenuItem("启动", null, (s, e) => {
+            var startItem = new ToolStripMenuItem("启动", null, (s, e) =>
+            {
                 string containerId = GetSelectedContainerId();
                 if (!string.IsNullOrEmpty(containerId))
                 {
@@ -129,7 +130,8 @@ namespace DevToolbox.Forms
                 }
             });
 
-            var stopItem = new ToolStripMenuItem("停止", null, (s, e) => {
+            var stopItem = new ToolStripMenuItem("停止", null, (s, e) =>
+            {
                 string containerId = GetSelectedContainerId();
                 if (!string.IsNullOrEmpty(containerId))
                 {
@@ -138,7 +140,8 @@ namespace DevToolbox.Forms
                 }
             });
 
-            var restartItem = new ToolStripMenuItem("重启", null, (s, e) => {
+            var restartItem = new ToolStripMenuItem("重启", null, (s, e) =>
+            {
                 string containerId = GetSelectedContainerId();
                 if (!string.IsNullOrEmpty(containerId))
                 {
@@ -147,7 +150,8 @@ namespace DevToolbox.Forms
                 }
             });
 
-            var logsItem = new ToolStripMenuItem("查看日志", null, (s, e) => {
+            var logsItem = new ToolStripMenuItem("查看日志", null, (s, e) =>
+            {
                 string containerId = GetSelectedContainerId();
                 if (!string.IsNullOrEmpty(containerId))
                 {
@@ -155,7 +159,8 @@ namespace DevToolbox.Forms
                 }
             });
 
-            var inspectItem = new ToolStripMenuItem("查看详细信息", null, (s, e) => {
+            var inspectItem = new ToolStripMenuItem("查看详细信息", null, (s, e) =>
+            {
                 string containerId = GetSelectedContainerId();
                 if (!string.IsNullOrEmpty(containerId))
                 {
@@ -163,7 +168,8 @@ namespace DevToolbox.Forms
                 }
             });
 
-            var downloadDBItem = new ToolStripMenuItem("下载数据库", null, (s, e) => {
+            var downloadDBItem = new ToolStripMenuItem("下载数据库", null, (s, e) =>
+            {
                 string containerId = GetSelectedContainerId();
                 if (!string.IsNullOrEmpty(containerId))
                 {
@@ -183,7 +189,8 @@ namespace DevToolbox.Forms
             });
 
             // 在显示菜单前检查容器状态并启用/禁用相应选项
-            containerContextMenu.Opening += (s, e) => {
+            containerContextMenu.Opening += (s, e) =>
+            {
                 string status = GetSelectedContainerStatus();
                 startItem.Enabled = status?.Contains("Exited") ?? false;
                 stopItem.Enabled = status?.Contains("Up") ?? false;
@@ -195,22 +202,22 @@ namespace DevToolbox.Forms
 
         private string GetSelectedContainerId()
         {
-            return listViewContainers.SelectedItems.Count > 0 
-                ? listViewContainers.SelectedItems[0].Text 
+            return listViewContainers.SelectedItems.Count > 0
+                ? listViewContainers.SelectedItems[0].Text
                 : null;
         }
 
         private string GetSelectedContainerStatus()
         {
-            return listViewContainers.SelectedItems.Count > 0 
-                ? listViewContainers.SelectedItems[0].SubItems[4].Text 
+            return listViewContainers.SelectedItems.Count > 0
+                ? listViewContainers.SelectedItems[0].SubItems[4].Text
                 : null;
         }
 
         private string GetSelectedContainerImage()
         {
-            return listViewContainers.SelectedItems.Count > 0 
-                ? listViewContainers.SelectedItems[0].SubItems[1].Text 
+            return listViewContainers.SelectedItems.Count > 0
+                ? listViewContainers.SelectedItems[0].SubItems[1].Text
                 : null;
         }
 
@@ -345,15 +352,16 @@ namespace DevToolbox.Forms
 
                 // 添加工具栏
                 ToolStrip toolStrip = new ToolStrip();
-                
+
                 var refreshButton = new ToolStripButton("刷新");
                 refreshButton.Click += (s, e) => LoadLogs(containerId, txtLogs);
 
                 var followButton = new ToolStripButton("实时跟踪");
                 var followTimer = new System.Windows.Forms.Timer { Interval = 1000 };
                 followTimer.Tick += (s, e) => LoadLogs(containerId, txtLogs, true);
-                
-                followButton.Click += (s, e) => {
+
+                followButton.Click += (s, e) =>
+                {
                     followButton.Checked = !followButton.Checked;
                     followTimer.Enabled = followButton.Checked;
                 };
@@ -445,7 +453,7 @@ namespace DevToolbox.Forms
         {
             var configs = ConfigManager.LoadMySQLConfigs();
             MySQLConfig lastConfig = null;
-            
+
             // 获取上次的配置（如果有）
             configs.TryGetValue(containerId, out lastConfig);
 
@@ -460,16 +468,18 @@ namespace DevToolbox.Forms
                 loginForm.MinimizeBox = false;
 
                 var lblUsername = new Label { Text = "用户名:", Location = new Point(20, 20), AutoSize = true };
-                var txtUsername = new TextBox { 
-                    Location = new Point(100, 20), 
+                var txtUsername = new TextBox
+                {
+                    Location = new Point(100, 20),
                     Size = new Size(150, 20),
                     Text = lastConfig?.Username ?? "" // 填充上次的用户名
                 };
 
                 var lblPassword = new Label { Text = "密码:", Location = new Point(20, 50), AutoSize = true };
-                var txtPassword = new TextBox { 
-                    Location = new Point(100, 50), 
-                    Size = new Size(150, 20), 
+                var txtPassword = new TextBox
+                {
+                    Location = new Point(100, 50),
+                    Size = new Size(150, 20),
                     PasswordChar = '*',
                     Text = lastConfig?.Password ?? "" // 填充上次的密码
                 };
@@ -546,7 +556,7 @@ namespace DevToolbox.Forms
                                     .Replace("-", "")     // 删除横线
                                     .Replace("+", "")     // 删除加号
                                     .Trim())             // 再次去除可能的空格
-                                .Where(db => !string.IsNullOrWhiteSpace(db) && 
+                                .Where(db => !string.IsNullOrWhiteSpace(db) &&
                                             !db.StartsWith("[") &&           // 过滤掉会话信息
                                             !db.EndsWith("#") &&            // 过滤掉提示符
                                             !db.Equals("information_schema", StringComparison.OrdinalIgnoreCase) &&  // 过滤系统数据库
@@ -674,7 +684,7 @@ namespace DevToolbox.Forms
                             using (var scpClient = new ScpClient(sshClient.ConnectionInfo))
                             {
                                 scpClient.Connect();
-                                
+
                                 // 获取文件大小 - 使用 ls -l 命令
                                 var sizeCommand = sshClient.CreateCommand($"ls -l {hostTempPath} | awk '{{print $5}}'");
                                 var fileSizeStr = sizeCommand.Execute().Trim();
@@ -694,7 +704,7 @@ namespace DevToolbox.Forms
                                 {
                                     await Task.Run(() => scpClient.Download(hostTempPath, fileStream));
                                 }
-                                
+
                                 scpClient.Disconnect();
                             }
 
@@ -704,7 +714,7 @@ namespace DevToolbox.Forms
                         // 清理远程临时文件（容器内和主机上的）
                         shellStream.WriteLine($"rm {dockerFilePath}");
                         await Task.Delay(500);
-                        
+
                         var cleanCommand = sshClient.CreateCommand($"rm {hostTempPath}");
                         cleanCommand.Execute();
 
@@ -718,6 +728,11 @@ namespace DevToolbox.Forms
                     MessageBox.Show($"导出过程中发生错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private void InitializeComponent()
+        {
+
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

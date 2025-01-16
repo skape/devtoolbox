@@ -127,7 +127,8 @@ namespace DevToolbox.Forms
 
         private void BtnDBRestore_Click(object sender, EventArgs e)
         {
-            MessageBox.Show("数据库恢复功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            var dbRestoreForm = new DatabaseRestoreForm();
+            dbRestoreForm.ShowDialog();
         }
 
         private void BtnDeploy_Click(object sender, EventArgs e)
