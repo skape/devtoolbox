@@ -15,6 +15,12 @@ namespace DevToolbox.Utils
             "sshconfig.json"
         );
 
+        private static readonly string MySQLConfigPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "DevToolbox",
+            "mysqlconfig.json"
+        );
+
         public static List<SSHConfig> LoadConfigs()
         {
             try
@@ -71,6 +77,46 @@ namespace DevToolbox.Utils
             }
 
             SaveConfigs(configs);
+        }
+
+        public static Dictionary<string, MySQLConfig> LoadMySQLConfigs()
+        {
+            try
+            {
+                if (File.Exists(MySQLConfigPath))
+                {
+                    var json = File.ReadAllText(MySQLConfigPath);
+                    return JsonConvert.DeserializeObject<Dictionary<string, MySQLConfig>>(json) 
+                        ?? new Dictionary<string, MySQLConfig>();
+                }
+            }
+            catch (Exception)
+            {
+                // 如果读取失败，返回空字典
+            }
+            return new Dictionary<string, MySQLConfig>();
+        }
+
+        public static void SaveMySQLConfig(MySQLConfig config)
+        {
+            var configs = LoadMySQLConfigs();
+            configs[config.ContainerId] = config;
+            
+            try
+            {
+                var directory = Path.GetDirectoryName(MySQLConfigPath);
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var json = JsonConvert.SerializeObject(configs, Formatting.Indented);
+                File.WriteAllText(MySQLConfigPath, json);
+            }
+            catch (Exception)
+            {
+                // 处理保存失败的情况
+            }
         }
     }
 } 
