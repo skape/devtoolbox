@@ -231,8 +231,8 @@ namespace DevToolbox.Forms
                 // 切换到MySQL所在目录
                 string mysqlDir = Path.GetDirectoryName(txtMySqlPath.Text);
                 
-                // 构建命令
-                string command = $"cd /d \"{mysqlDir}\" && mysql -u{txtUsername.Text} -p{txtPassword.Text} {txtDatabase.Text} < \"{txtSelectedFile.Text}\"";
+                // 构建命令，使用标准格式，密码用引号包裹
+                string command = $"cd /d \"{mysqlDir}\" && mysql -h {txtIp.Text} -P {txtPort.Text} -u {txtUsername.Text} -p\"{txtPassword.Text}\" {txtDatabase.Text} < \"{txtSelectedFile.Text}\"";
 
                 // 创建取消令牌
                 using (var cts = new System.Threading.CancellationTokenSource())
