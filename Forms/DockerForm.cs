@@ -1450,12 +1450,7 @@ namespace DevToolbox.Forms
                         }
 
                         // 在目标服务器上解压文件
-                        var cmd = targetSshClient.CreateCommand($@"
-                            mkdir -p {remotePath} &&
-                            rm -rf {remotePath}/* &&
-                            unzip -o /tmp/dist.zip -d {remotePath}/ &&
-                            rm /tmp/dist.zip
-                        ");
+                        var cmd = targetSshClient.CreateCommand($"cd {remotePath} && unzip -o /tmp/dist.zip && rm -f /tmp/dist.zip");
                         
                         var result = cmd.Execute();
                         var error = cmd.Error;
