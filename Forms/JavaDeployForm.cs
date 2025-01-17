@@ -8,6 +8,7 @@ using DevToolbox.Models;
 using DevToolbox.Utils;
 using Renci.SshNet;
 using System.Text;
+using System.Threading;
 
 namespace DevToolbox.Forms
 {
@@ -252,6 +253,20 @@ namespace DevToolbox.Forms
                     StartPosition = FormStartPosition.CenterParent
                 };
 
+                var cancellationTokenSource = new CancellationTokenSource();
+
+                logForm.FormClosing += (s, args) =>
+                {
+                    if (MessageBox.Show("确定要取消部署吗？", "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    {
+                        cancellationTokenSource.Cancel();
+                    }
+                    else
+                    {
+                        args.Cancel = true;
+                    }
+                };
+
                 RichTextBox logBox = new RichTextBox
                 {
                     Dock = DockStyle.Fill,
@@ -266,338 +281,289 @@ namespace DevToolbox.Forms
                 logForm.Controls.Add(logBox);
                 logForm.Show();
 
-                try
+                // 在后台线程中执行部署
+                _ = Task.Run(async () =>
                 {
-                    // 执行Maven打包
-                    var process = new Process
+                    try
                     {
-                        StartInfo = new ProcessStartInfo
+                        // 执行Maven打包
+                        var process = new Process
                         {
-                            FileName = "cmd.exe",
-                            Arguments = $"/C cd /d \"{txtProjectPath.Text}\" && mvn -T 4C package -DskipTests",
-                            UseShellExecute = false,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true,
-                            CreateNoWindow = true
-                        }
-                    };
-
-                    process.OutputDataReceived += (s, args) =>
-                    {
-                        if (!string.IsNullOrEmpty(args.Data))
-                        {
-                            logBox.BeginInvoke(new Action(() =>
+                            StartInfo = new ProcessStartInfo
                             {
-                                logBox.AppendText(args.Data + Environment.NewLine);
-                                logBox.ScrollToCaret();
-                            }));
-                        }
-                    };
-
-                    process.ErrorDataReceived += (s, args) =>
-                    {
-                        if (!string.IsNullOrEmpty(args.Data))
-                        {
-                            logBox.BeginInvoke(new Action(() =>
-                            {
-                                logBox.SelectionColor = Color.Red;
-                                logBox.AppendText(args.Data + Environment.NewLine);
-                                logBox.SelectionColor = logBox.ForeColor;
-                                logBox.ScrollToCaret();
-                            }));
-                        }
-                    };
-
-                    process.Start();
-                    process.BeginOutputReadLine();
-                    process.BeginErrorReadLine();
-                    await Task.Run(() => process.WaitForExit());
-
-                    if (process.ExitCode != 0)
-                    {
-                        logBox.BeginInvoke(new Action(() =>
-                        {
-                            logBox.SelectionColor = Color.Red;
-                            logBox.AppendText("\nMaven打包失败！\n");
-                            logBox.SelectionColor = logBox.ForeColor;
-                        }));
-                        return;
-                    }
-
-                    logBox.BeginInvoke(new Action(() =>
-                    {
-                        logBox.SelectionColor = Color.Green;
-                        logBox.AppendText("\nMaven打包成功！准备上传文件...\n");
-                        logBox.SelectionColor = logBox.ForeColor;
-                    }));
-
-                    // 查找生成的JAR文件
-                    var targetDir = Path.Combine(txtProjectPath.Text, "target");
-                    var jarFiles = Directory.GetFiles(targetDir, "*.jar")
-                        .Where(f => !f.EndsWith("-sources.jar") && !f.EndsWith("-javadoc.jar"))
-                        .ToList();
-
-                    if (jarFiles.Count == 0)
-                    {
-                        logBox.BeginInvoke(new Action(() =>
-                        {
-                            logBox.SelectionColor = Color.Red;
-                            logBox.AppendText("\n未找到生成的JAR文件\n");
-                            logBox.SelectionColor = logBox.ForeColor;
-                        }));
-                        return;
-                    }
-
-                    var jarFile = jarFiles[0]; // 使用第一个找到的JAR文件
-
-                    // 连接服务器并上传文件
-                    logBox.BeginInvoke(new Action(() =>
-                    {
-                        logBox.AppendText("\n正在连接服务器...\n");
-                    }));
-
-                    using (var sshClient = new SshClient(selectedServer.Host, selectedServer.Port, selectedServer.Username, selectedServer.Password))
-                    {
-                        sshClient.Connect();
-
-                        // 创建远程目录
-                        logBox.BeginInvoke(new Action(() =>
-                        {
-                            logBox.AppendText($"\n创建远程目录: {txtRemotePath.Text}\n");
-                        }));
-
-                        var mkdirCmd = sshClient.CreateCommand($"mkdir -p {txtRemotePath.Text}");
-                        mkdirCmd.Execute();
-
-                        // 上传JAR文件
-                        logBox.BeginInvoke(new Action(() =>
-                        {
-                            logBox.AppendText("\n正在上传JAR文件...\n");
-                        }));
-
-                        using (var scpClient = new ScpClient(sshClient.ConnectionInfo))
-                        {
-                            scpClient.Connect();
-
-                            var fileInfo = new FileInfo(jarFile);
-                            var fileName = Path.GetFileName(jarFile);
-                            var remotePath = txtRemotePath.Text.TrimEnd('/') + "/" + fileName;
-                            
-                            logBox.BeginInvoke(new Action(() =>
-                            {
-                                logBox.AppendText($"\n目标路径: {remotePath}\n");
-                            }));
-
-                            var lastProgress = 0L;
-                            var lastUpdateTime = DateTime.Now;
-                            var startTime = DateTime.Now;
-                            var lastBytes = 0L;
-                            
-                            // 创建进度窗口
-                            Form progressForm = new Form
-                            {
-                                Text = "文件上传进度",
-                                Size = new Size(500, 150),
-                                FormBorderStyle = FormBorderStyle.FixedDialog,
-                                StartPosition = FormStartPosition.CenterScreen,
-                                MaximizeBox = false,
-                                MinimizeBox = false,
-                                BackColor = Color.FromArgb(30, 30, 30),
-                                TopMost = true
-                            };
-                            
-                            var progressBar = new ProgressBar
-                            {
-                                Location = new Point(20, 20),
-                                Size = new Size(440, 25),
-                                Style = ProgressBarStyle.Continuous,
-                                Minimum = 0,
-                                Maximum = 100,
-                                Value = 0
-                            };
-                            
-                            var lblProgress = new Label
-                            {
-                                Location = new Point(20, 55),
-                                Size = new Size(440, 40),
-                                ForeColor = Color.White,
-                                Font = new Font("Consolas", 9F),
-                                TextAlign = ContentAlignment.MiddleLeft
-                            };
-                            
-                            progressForm.Controls.AddRange(new Control[] { progressBar, lblProgress });
-                            progressForm.Show();
-
-                            scpClient.Uploading += (sender, args) =>
-                            {
-                                var now = DateTime.Now;
-                                if ((now - lastUpdateTime).TotalMilliseconds > 100) // 每100ms更新一次
-                                {
-                                    var progress = (int)(args.Uploaded * 100 / fileInfo.Length);
-                                    var timeElapsed = (now - startTime).TotalSeconds;
-                                    var bytesPerSecond = args.Uploaded / timeElapsed;
-                                    var remainingBytes = fileInfo.Length - args.Uploaded;
-                                    var estimatedSecondsRemaining = remainingBytes / bytesPerSecond;
-                                    
-                                    // 计算瞬时速度
-                                    var instantSpeed = (args.Uploaded - lastBytes) / (now - lastUpdateTime).TotalSeconds;
-                                    
-                                    if (progress > lastProgress)
-                                    {
-                                        progressForm.BeginInvoke(new Action(() =>
-                                        {
-                                            progressBar.Value = progress;
-                                            lblProgress.Text = string.Format(
-                                                "进度: {0}% ({1}/{2})\n速度: {3}/s\n预计剩余时间: {4}",
-                                                progress,
-                                                FormatFileSize(args.Uploaded),
-                                                FormatFileSize(fileInfo.Length),
-                                                FormatFileSize((long)instantSpeed),
-                                                FormatTimeSpan(TimeSpan.FromSeconds(estimatedSecondsRemaining))
-                                            );
-                                        }));
-                                        lastProgress = progress;
-                                    }
-                                    lastUpdateTime = now;
-                                    lastBytes = args.Uploaded;
-                                }
-                            };
-
-                            await Task.Run(() => scpClient.Upload(fileInfo, remotePath));
-                            scpClient.Disconnect();
-
-                            // 在UI线程上关闭进度窗口
-                            if (!progressForm.IsDisposed)
-                            {
-                                if (progressForm.InvokeRequired)
-                                {
-                                    progressForm.Invoke(new Action(() =>
-                                    {
-                                        progressForm.Close();
-                                        progressForm.Dispose();
-                                    }));
-                                }
-                                else
-                                {
-                                    progressForm.Close();
-                                    progressForm.Dispose();
-                                }
+                                FileName = "cmd.exe",
+                                Arguments = $"/C cd /d \"{txtProjectPath.Text}\" && mvn -T 4C package -DskipTests",
+                                UseShellExecute = false,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                                CreateNoWindow = true
                             }
-                            
-                            // 更新日志
-                            if (logBox.InvokeRequired)
-                            {
-                                logBox.Invoke(new Action(() =>
-                                {
-                                    logBox.AppendText($"\n文件上传完成: {remotePath}\n");
-                                    logBox.ScrollToCaret();
-                                }));
-                            }
-                            else
-                            {
-                                logBox.AppendText($"\n文件上传完成: {remotePath}\n");
-                                logBox.ScrollToCaret();
-                            }
-                        }
+                        };
 
-                        // 执行部署脚本
-                        if (logBox.InvokeRequired)
+                        var processExited = new TaskCompletionSource<bool>();
+
+                        process.OutputDataReceived += (s, args) =>
                         {
-                            logBox.Invoke(new Action(() =>
+                            if (!string.IsNullOrEmpty(args.Data))
                             {
-                                logBox.AppendText("\n正在执行部署脚本...\n");
-                                logBox.AppendText($"脚本路径: {txtDeployScript.Text}\n");
-                                logBox.ScrollToCaret();
-                            }));
-                        }
-                        else
-                        {
-                            logBox.AppendText("\n正在执行部署脚本...\n");
-                            logBox.AppendText($"脚本路径: {txtDeployScript.Text}\n");
-                            logBox.ScrollToCaret();
-                        }
-
-                        // 确保脚本有执行权限
-                        var chmodCmd = sshClient.CreateCommand($"chmod +x {txtDeployScript.Text}");
-                        await Task.Run(() => chmodCmd.Execute());
-
-                        // 执行脚本文件
-                        var deployCmd = sshClient.CreateCommand($"bash {txtDeployScript.Text}");
-                        var deployResult = await Task.Run(() => deployCmd.Execute());
-                        var deployError = deployCmd.Error;
-
-                        if (!string.IsNullOrEmpty(deployError))
-                        {
-                            if (logBox.InvokeRequired)
-                            {
-                                logBox.Invoke(new Action(() =>
-                                {
-                                    logBox.SelectionColor = Color.Red;
-                                    logBox.AppendText($"\n部署脚本执行失败: {deployError}\n");
-                                    logBox.SelectionColor = logBox.ForeColor;
-                                    logBox.ScrollToCaret();
-                                }));
+                                SafeAppendText(logBox, args.Data + Environment.NewLine);
                             }
-                            else
+                        };
+
+                        process.ErrorDataReceived += (s, args) =>
+                        {
+                            if (!string.IsNullOrEmpty(args.Data))
                             {
-                                logBox.SelectionColor = Color.Red;
-                                logBox.AppendText($"\n部署脚本执行失败: {deployError}\n");
-                                logBox.SelectionColor = logBox.ForeColor;
-                                logBox.ScrollToCaret();
+                                SafeAppendText(logBox, args.Data + Environment.NewLine, Color.Red);
                             }
+                        };
+
+                        process.Exited += (s, e) => processExited.SetResult(true);
+                        process.EnableRaisingEvents = true;
+
+                        process.Start();
+                        process.BeginOutputReadLine();
+                        process.BeginErrorReadLine();
+
+                        using var registration = cancellationTokenSource.Token.Register(() =>
+                        {
+                            try { process.Kill(); } catch { }
+                        });
+
+                        await Task.WhenAny(processExited.Task, Task.Delay(-1, cancellationTokenSource.Token));
+
+                        if (cancellationTokenSource.Token.IsCancellationRequested)
+                        {
+                            SafeAppendText(logBox, "\n部署已取消\n", Color.Yellow);
                             return;
                         }
 
-                        if (!string.IsNullOrEmpty(deployResult))
+                        if (process.ExitCode != 0)
                         {
-                            if (logBox.InvokeRequired)
+                            SafeAppendText(logBox, "\nMaven打包失败！\n", Color.Red);
+                            return;
+                        }
+
+                        SafeAppendText(logBox, "\nMaven打包成功！准备上传文件...\n", Color.Green);
+
+                        // 查找生成的JAR文件
+                        var targetDir = Path.Combine(txtProjectPath.Text, "target");
+                        var jarFiles = Directory.GetFiles(targetDir, "*.jar")
+                            .Where(f => !f.EndsWith("-sources.jar") && !f.EndsWith("-javadoc.jar"))
+                            .ToList();
+
+                        if (jarFiles.Count == 0)
+                        {
+                            SafeAppendText(logBox, "\n未找到生成的JAR文件\n", Color.Red);
+                            return;
+                        }
+
+                        var jarFile = jarFiles[0];
+
+                        SafeAppendText(logBox, "\n正在连接服务器...\n");
+
+                        using (var sshClient = new SshClient(selectedServer.Host, selectedServer.Port, selectedServer.Username, selectedServer.Password))
+                        {
+                            sshClient.Connect();
+
+                            SafeAppendText(logBox, $"\n创建远程目录: {txtRemotePath.Text}\n");
+
+                            var mkdirCmd = sshClient.CreateCommand($"mkdir -p {txtRemotePath.Text}");
+                            mkdirCmd.Execute();
+
+                            SafeAppendText(logBox, "\n正在上传JAR文件...\n");
+
+                            using (var scpClient = new ScpClient(sshClient.ConnectionInfo))
                             {
-                                logBox.Invoke(new Action(() =>
+                                scpClient.Connect();
+
+                                var fileInfo = new FileInfo(jarFile);
+                                var fileName = Path.GetFileName(jarFile);
+                                var remotePath = txtRemotePath.Text.TrimEnd('/') + "/" + fileName;
+
+                                SafeAppendText(logBox, $"\n目标路径: {remotePath}\n");
+
+                                var lastBytes = 0L;
+                                var lastUpdateTime = DateTime.Now;
+                                var startTime = DateTime.Now;
+
+                                LoadingForm uploadForm = null;
+                                logForm.Invoke(new Action(() => 
                                 {
-                                    logBox.AppendText($"\n部署脚本输出:\n{deployResult}\n");
-                                    logBox.ScrollToCaret();
+                                    uploadForm = new LoadingForm(logForm, "正在上传文件...", true);
+                                    uploadForm.Show();
+                                    Application.DoEvents();
                                 }));
-                            }
-                            else
-                            {
-                                logBox.AppendText($"\n部署脚本输出:\n{deployResult}\n");
-                                logBox.ScrollToCaret();
+
+                                try 
+                                {
+                                    scpClient.Uploading += (sender, e) =>
+                                    {
+                                        var now = DateTime.Now;
+                                        var progress = (double)e.Uploaded / fileInfo.Length * 100;
+                                        var instantSpeed = (e.Uploaded - lastBytes) / Math.Max(1, (now - lastUpdateTime).TotalSeconds);
+                                        var remainingBytes = fileInfo.Length - e.Uploaded;
+                                        var estimatedSecondsRemaining = remainingBytes / Math.Max(1, instantSpeed);
+
+                                        logForm.Invoke(new Action(() =>
+                                        {
+                                            if (uploadForm != null && !uploadForm.IsDisposed)
+                                            {
+                                                uploadForm.UpdateProgress(
+                                                    e.Uploaded,
+                                                    fileInfo.Length,
+                                                    $"进度: {progress:F1}% ({FormatFileSize(e.Uploaded)}/{FormatFileSize(fileInfo.Length)})\n" +
+                                                    $"速度: {FormatFileSize((long)instantSpeed)}/s\n" +
+                                                    $"预计剩余时间: {FormatTimeSpan(TimeSpan.FromSeconds(estimatedSecondsRemaining))}"
+                                                );
+                                            }
+                                        }));
+
+                                        lastBytes = e.Uploaded;
+                                        lastUpdateTime = now;
+                                    };
+
+                                    // 上传文件
+                                    using (var fs = new FileStream(jarFile, FileMode.Open))
+                                    {
+                                        await Task.Run(() => scpClient.Upload(fs, remotePath));
+                                    }
+                                }
+                                finally
+                                {
+                                    logForm.Invoke(new Action(() =>
+                                    {
+                                        if (uploadForm != null && !uploadForm.IsDisposed)
+                                        {
+                                            uploadForm.Close();
+                                            uploadForm.Dispose();
+                                        }
+                                    }));
+                                }
+
+                                if (cancellationTokenSource.Token.IsCancellationRequested)
+                                {
+                                    SafeAppendText(logBox, "\n上传已取消\n", Color.Yellow);
+                                    return;
+                                }
+
+                                SafeAppendText(logBox, $"\n文件上传完成: {remotePath}\n");
+
+                                // 执行部署脚本
+                                SafeAppendText(logBox, "\n正在执行部署脚本...\n");
+                                SafeAppendText(logBox, $"脚本路径: {txtDeployScript.Text}\n");
+
+                                // 确保脚本有执行权限
+                                var chmodCmd = sshClient.CreateCommand($"chmod +x {txtDeployScript.Text}");
+                                await Task.Run(() => chmodCmd.Execute());
+
+                                // 执行脚本文件并实时显示输出
+                                var deployCmd = sshClient.CreateCommand($"bash {txtDeployScript.Text}");
+                                deployCmd.CommandTimeout = TimeSpan.FromHours(1);
+
+                                // 设置输出流
+                                using var outputReader = new StreamReader(deployCmd.OutputStream);
+                                using var errorReader = new StreamReader(deployCmd.ExtendedOutputStream);
+
+                                // 在后台线程中执行命令并处理输出
+                                var executeTask = Task.Run(async () =>
+                                {
+                                    IAsyncResult asyncResult = null;
+                                    try
+                                    {
+                                        // 开始执行命令
+                                        asyncResult = deployCmd.BeginExecute();
+                                        
+                                        // 持续读取输出直到命令完成
+                                        while (!asyncResult.IsCompleted && !cancellationTokenSource.Token.IsCancellationRequested)
+                                        {
+                                            await ProcessStreamOutput(outputReader, errorReader, logBox, cancellationTokenSource.Token);
+                                            await Task.Delay(100, cancellationTokenSource.Token);
+                                        }
+
+                                        if (!cancellationTokenSource.Token.IsCancellationRequested)
+                                        {
+                                            // 完成命令执行
+                                            deployCmd.EndExecute(asyncResult);
+
+                                            // 读取剩余的输出
+                                            await ProcessStreamOutput(outputReader, errorReader, logBox, cancellationTokenSource.Token);
+                                        }
+
+                                        return deployCmd.ExitStatus;
+                                    }
+                                    catch (Exception)
+                                    {
+                                        // 确保命令被终止
+                                        try 
+                                        { 
+                                            if (asyncResult != null && !asyncResult.IsCompleted)
+                                            {
+                                                deployCmd.EndExecute(asyncResult);
+                                            }
+                                        } 
+                                        catch { }
+                                        throw;
+                                    }
+                                });
+
+                                try
+                                {
+                                    // 等待命令执行完成或取消
+                                    await Task.WhenAny(executeTask, Task.Delay(-1, cancellationTokenSource.Token));
+
+                                    if (cancellationTokenSource.Token.IsCancellationRequested)
+                                    {
+                                        try
+                                        {
+                                            var killCmd = sshClient.CreateCommand($"pkill -f {txtDeployScript.Text}");
+                                            killCmd.Execute();
+                                        }
+                                        catch { }
+                                        SafeAppendText(logBox, "\n部署已取消\n", Color.Yellow);
+                                        return;
+                                    }
+
+                                    var exitCode = await executeTask;
+                                    if (exitCode != 0)
+                                    {
+                                        SafeAppendText(logBox, $"\n部署脚本执行失败，退出代码: {exitCode}\n", Color.Red);
+                                        return;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    SafeAppendText(logBox, $"\n执行脚本时发生错误: {ex.Message}\n", Color.Red);
+                                    return;
+                                }
                             }
                         }
 
-                        sshClient.Disconnect();
+                        SafeAppendText(logBox, "\n部署完成！\n", Color.Green);
 
-                        if (logBox.InvokeRequired)
+                        if (logForm.InvokeRequired)
                         {
-                            logBox.Invoke(new Action(() =>
+                            logForm.Invoke(new Action(() =>
                             {
-                                logBox.SelectionColor = Color.Green;
-                                logBox.AppendText("\n部署完成！\n");
-                                logBox.SelectionColor = logBox.ForeColor;
-                                logBox.ScrollToCaret();
+                                MessageBox.Show("部署成功！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                this.Close();
                             }));
                         }
                         else
                         {
-                            logBox.SelectionColor = Color.Green;
-                            logBox.AppendText("\n部署完成！\n");
-                            logBox.SelectionColor = logBox.ForeColor;
-                            logBox.ScrollToCaret();
+                            MessageBox.Show("部署成功！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            this.Close();
                         }
-
-                        MessageBox.Show("部署成功！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        this.Close();
                     }
-                }
-                catch (Exception ex)
-                {
-                    logBox.BeginInvoke(new Action(() =>
+                    catch (OperationCanceledException)
                     {
-                        logBox.SelectionColor = Color.Red;
-                        logBox.AppendText($"\n发生错误: {ex.Message}\n");
-                        logBox.SelectionColor = logBox.ForeColor;
-                    }));
-                }
+                        SafeAppendText(logBox, "\n操作已取消\n", Color.Yellow);
+                    }
+                    catch (Exception ex)
+                    {
+                        SafeAppendText(logBox, $"\n发生错误: {ex.Message}\n", Color.Red);
+                    }
+                }, cancellationTokenSource.Token);
             }
             catch (Exception ex)
             {
@@ -629,6 +595,46 @@ namespace DevToolbox.Forms
                 return $"{timeSpan.Minutes}分{timeSpan.Seconds}秒";
             }
             return $"{timeSpan.Seconds}秒";
+        }
+
+        private void SafeAppendText(RichTextBox logBox, string text, Color? color = null)
+        {
+            if (logBox.IsDisposed) return;
+
+            logBox.BeginInvoke(new Action(() =>
+            {
+                if (color.HasValue)
+                {
+                    logBox.SelectionColor = color.Value;
+                }
+                logBox.AppendText(text);
+                if (color.HasValue)
+                {
+                    logBox.SelectionColor = logBox.ForeColor;
+                }
+                logBox.ScrollToCaret();
+            }));
+        }
+
+        private async Task ProcessStreamOutput(StreamReader outputReader, StreamReader errorReader, RichTextBox logBox, CancellationToken cancellationToken)
+        {
+            while (!outputReader.EndOfStream && !cancellationToken.IsCancellationRequested)
+            {
+                var line = await outputReader.ReadLineAsync();
+                if (!string.IsNullOrEmpty(line))
+                {
+                    SafeAppendText(logBox, line + Environment.NewLine);
+                }
+            }
+
+            while (!errorReader.EndOfStream && !cancellationToken.IsCancellationRequested)
+            {
+                var line = await errorReader.ReadLineAsync();
+                if (!string.IsNullOrEmpty(line))
+                {
+                    SafeAppendText(logBox, line + Environment.NewLine, Color.Red);
+                }
+            }
         }
 
         private class SSHConfigItem
