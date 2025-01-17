@@ -18,6 +18,7 @@ namespace DevToolbox.Utils
         private static readonly string MySQLConfigPath = Path.Combine(AppDataPath, "mysql_config.json");
         private static readonly string SSHConfigPath = Path.Combine(AppDataPath, "ssh_config.json");
         private static readonly string DeployConfigPath = Path.Combine(AppDataPath, "deploy_configs.json");
+        private static readonly string JavaDeployConfigPath = Path.Combine(AppDataPath, "java_deploy_configs.json");
 
         static ConfigManager()
         {
@@ -159,6 +160,49 @@ namespace DevToolbox.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"保存部署配置失败: {ex.Message}");
+            }
+        }
+
+        public static List<JavaDeployConfig> LoadJavaDeployConfigs()
+        {
+            try
+            {
+                if (File.Exists(JavaDeployConfigPath))
+                {
+                    var json = File.ReadAllText(JavaDeployConfigPath);
+                    return JsonConvert.DeserializeObject<List<JavaDeployConfig>>(json) ?? new List<JavaDeployConfig>();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"加载Java部署配置失败: {ex.Message}");
+            }
+            return new List<JavaDeployConfig>();
+        }
+
+        public static void SaveJavaDeployConfig(JavaDeployConfig config)
+        {
+            try
+            {
+                var configs = LoadJavaDeployConfigs();
+                
+                // 查找并更新现有配置
+                var existingConfig = configs.FirstOrDefault(c => 
+                    c.ProjectPath == config.ProjectPath && 
+                    c.ServerHost == config.ServerHost);
+
+                if (existingConfig != null)
+                {
+                    configs.Remove(existingConfig);
+                }
+                configs.Add(config);
+
+                var json = JsonConvert.SerializeObject(configs, Formatting.Indented);
+                File.WriteAllText(JavaDeployConfigPath, json);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"保存Java部署配置失败: {ex.Message}");
             }
         }
     }

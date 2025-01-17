@@ -133,7 +133,8 @@ namespace DevToolbox.Forms
 
         private void BtnDeploy_Click(object sender, EventArgs e)
         {
-            MessageBox.Show("部署功能正在开发中...", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            var javaDeployForm = new JavaDeployForm();
+            javaDeployForm.ShowDialog();
         }
 
         private async void BtnCleanup_Click(object sender, EventArgs e)
