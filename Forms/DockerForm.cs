@@ -132,6 +132,14 @@ namespace DevToolbox.Forms
             };
             btnLogs.Click += BtnLogs_Click;
 
+            Button batchOpertaionBtn = new Button
+            {
+                Text = "批量操作",
+                Location = new System.Drawing.Point(650, 520),
+                Size = new System.Drawing.Size(100, 30)
+            };
+            batchOpertaionBtn.Click += BtnBatchOperation_Click;
+
             // 添加控件
             this.Controls.AddRange(new Control[] {
                 listViewContainers,
@@ -139,7 +147,8 @@ namespace DevToolbox.Forms
                 btnStart,
                 btnStop,
                 btnRestart,
-                btnLogs
+                btnLogs,
+                batchOpertaionBtn
             });
 
             // 初始化右键菜单
@@ -1496,9 +1505,321 @@ namespace DevToolbox.Forms
             }
         }
 
-        private void InitializeComponent()
+        private void BtnBatchOperation_Click(object sender, EventArgs e)
         {
+            var batchForm = new BatchOperationForm(
+                listViewContainers, 
+                containerContextMenu,
+                ExecuteDockerCommand,
+                ShowContainerLogs,
+                ExecuteBuild,
+                Deploy
+            );
+            batchForm.ShowDialog();
+            LoadContainers(); // 刷新容器列表
+        }
 
+        private class BatchOperationForm : Form
+        {
+            private TreeView treeView;
+            private Button btnExecute;
+            private Button btnCancel;
+            private ListView containerList;
+            private ContextMenuStrip contextMenu;
+            private Action<string, string> executeDockerCommand;
+            private Action<string> showContainerLogs;
+            private Action<string, string> executeBuild;
+            private Func<string, string, Task> deploy;
+
+            public BatchOperationForm(
+                ListView containers, 
+                ContextMenuStrip menu,
+                Action<string, string> executeDockerCommand,
+                Action<string> showContainerLogs,
+                Action<string, string> executeBuild,
+                Func<string, string, Task> deploy)
+            {
+                containerList = containers;
+                contextMenu = menu;
+                this.executeDockerCommand = executeDockerCommand;
+                this.showContainerLogs = showContainerLogs;
+                this.executeBuild = executeBuild;
+                this.deploy = deploy;
+                InitializeUI();
+                LoadContainers();
+            }
+
+            private void InitializeUI()
+            {
+                this.Text = "批量操作";
+                this.Size = new Size(500, 600);
+                this.StartPosition = FormStartPosition.CenterParent;
+
+                treeView = new TreeView
+                {
+                    Location = new Point(10, 10),
+                    Size = new Size(460, 500),
+                    CheckBoxes = true,
+                    ShowLines = true,
+                    ShowPlusMinus = true,
+                    ShowRootLines = true,
+                    Font = new Font("Microsoft YaHei UI", 10F),
+                    FullRowSelect = true,
+                    HotTracking = true,
+                    LabelEdit = false
+                };
+
+                // 添加 TreeView 的节点选中事件
+                treeView.AfterCheck += TreeView_AfterCheck;
+                treeView.NodeMouseClick += TreeView_NodeMouseClick;
+
+                btnExecute = new Button
+                {
+                    Text = "执行",
+                    Location = new Point(290, 520),
+                    Size = new Size(80, 30)
+                };
+                btnExecute.Click += BtnExecute_Click;
+
+                btnCancel = new Button
+                {
+                    Text = "取消",
+                    Location = new Point(390, 520),
+                    Size = new Size(80, 30),
+                    DialogResult = DialogResult.Cancel
+                };
+
+                this.Controls.AddRange(new Control[] { treeView, btnExecute, btnCancel });
+                this.CancelButton = btnCancel;
+            }
+
+            private void TreeView_NodeMouseClick(object sender, TreeNodeMouseClickEventArgs e)
+            {
+                // 如果点击的不是复选框区域，则切换节点的选中状态
+                if (e.Location.X > 20) // 20是复选框的大致宽度
+                {
+                    e.Node.Checked = !e.Node.Checked;
+                }
+            }
+
+            private void TreeView_AfterCheck(object sender, TreeViewEventArgs e)
+            {
+                // 防止事件循环
+                if (e.Action == TreeViewAction.Unknown) return;
+
+                // 如果是容器节点被选中/取消选中
+                if (e.Node.Parent == null)
+                {
+                    foreach (TreeNode child in e.Node.Nodes)
+                    {
+                        if (child.Checked != e.Node.Checked)
+                        {
+                            child.Checked = e.Node.Checked;
+                        }
+                    }
+                }
+                // 如果是操作节点被选中/取消选中
+                else
+                {
+                    bool allChecked = true;
+                    bool anyChecked = false;
+                    foreach (TreeNode child in e.Node.Parent.Nodes)
+                    {
+                        if (child.Checked)
+                        {
+                            anyChecked = true;
+                        }
+                        else
+                        {
+                            allChecked = false;
+                        }
+                    }
+                    
+                    if (e.Node.Parent.Checked != allChecked)
+                    {
+                        e.Node.Parent.Checked = allChecked;
+                    }
+                }
+            }
+
+            private void LoadContainers()
+            {
+                treeView.Nodes.Clear();
+
+                foreach (ListViewItem item in containerList.Items)
+                {
+                    if (item.SubItems[4].Text.Contains("Up"))  // 只显示运行中的容器
+                    {
+                        var containerNode = new TreeNode
+                        {
+                            Text = item.SubItems[1].Text,  // 只显示镜像名称
+                            Tag = new ContainerInfo 
+                            { 
+                                Id = item.Text,
+                                Name = item.SubItems[2].Text,
+                                Image = item.SubItems[1].Text
+                            }
+                        };
+
+                        // 添加操作节点
+                        var operations = new[]
+                        {
+                            new { Text = "停止容器", Tag = "stop" },
+                            new { Text = "重启容器", Tag = "restart" },
+                            new { Text = "查看日志", Tag = "logs" },
+                            new { Text = "打包Dev环境", Tag = "build_dev" },
+                            new { Text = "打包Prod环境", Tag = "build_prod" },
+                            new { Text = "部署到Dev环境", Tag = "deploy_dev" },
+                            new { Text = "部署到Prod环境", Tag = "deploy_prod" },
+                            new { Text = "开发环境打包及部署", Tag = "build_deploy_dev" },
+                            new { Text = "生产环境打包及部署", Tag = "build_deploy_prod" }
+                        };
+
+                        foreach (var op in operations)
+                        {
+                            containerNode.Nodes.Add(new TreeNode
+                            {
+                                Text = op.Text,
+                                Tag = op.Tag
+                            });
+                        }
+
+                        treeView.Nodes.Add(containerNode);
+                    }
+                }
+
+                if (treeView.Nodes.Count > 0)
+                {
+                    treeView.ExpandAll();
+                }
+            }
+
+            private class ContainerInfo
+            {
+                public string Id { get; set; }
+                public string Name { get; set; }
+                public string Image { get; set; }
+            }
+
+            private async void BtnExecute_Click(object sender, EventArgs e)
+            {
+                // 按容器分组收集操作，保持TreeView中的顺序
+                var operationsByContainer = new List<(ContainerInfo Container, List<string> Operations)>();
+
+                foreach (TreeNode containerNode in treeView.Nodes)
+                {
+                    var containerInfo = (ContainerInfo)containerNode.Tag;
+                    var operations = new List<string>();
+                    
+                    foreach (TreeNode operationNode in containerNode.Nodes)
+                    {
+                        if (operationNode.Checked)
+                        {
+                            operations.Add(operationNode.Text);
+                        }
+                    }
+
+                    if (operations.Count > 0)
+                    {
+                        operationsByContainer.Add((containerInfo, operations));
+                    }
+                }
+
+                if (operationsByContainer.Count == 0)
+                {
+                    MessageBox.Show("请选择要执行的操作", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                // 构建确认消息
+                var confirmMessage = new StringBuilder("您确定要按以下顺序执行操作吗？\n\n");
+                foreach (var (container, operations) in operationsByContainer)
+                {
+                    confirmMessage.AppendLine($"容器：{container.Image}");
+                    confirmMessage.AppendLine("操作顺序：");
+                    for (int i = 0; i < operations.Count; i++)
+                    {
+                        confirmMessage.AppendLine($"  {i + 1}. {operations[i]}");
+                    }
+                    confirmMessage.AppendLine();
+                }
+
+                if (MessageBox.Show(
+                    confirmMessage.ToString(),
+                    "确认执行顺序",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Question) == DialogResult.OK)
+                {
+                    this.Enabled = false;
+                    try 
+                    {
+                        foreach (var (container, operations) in operationsByContainer)
+                        {
+                            var containerId = container.Id;
+                            // 按照列表中的顺序执行操作
+                            foreach (var operationText in operations)
+                            {
+                                var operation = GetOperationTag(operationText);
+                                switch (operation)
+                                {
+                                    case "stop":
+                                        executeDockerCommand($"docker stop {containerId}", "停止容器");
+                                        break;
+                                    case "restart":
+                                        executeDockerCommand($"docker restart {containerId}", "重启容器");
+                                        break;
+                                    case "logs":
+                                        showContainerLogs(containerId);
+                                        break;
+                                    case "build_dev":
+                                        executeBuild(containerId, "staging");
+                                        break;
+                                    case "build_prod":
+                                        executeBuild(containerId, "prod");
+                                        break;
+                                    case "deploy_dev":
+                                        await deploy(containerId, "dev");
+                                        break;
+                                    case "deploy_prod":
+                                        await deploy(containerId, "prod");
+                                        break;
+                                    case "build_deploy_dev":
+                                        executeBuild(containerId, "staging");
+                                        await deploy(containerId, "dev");
+                                        break;
+                                    case "build_deploy_prod":
+                                        executeBuild(containerId, "prod");
+                                        await deploy(containerId, "prod");
+                                        break;
+                                }
+                            }
+                        }
+                        this.DialogResult = DialogResult.OK;
+                    }
+                    finally 
+                    {
+                        this.Enabled = true;
+                    }
+                }
+            }
+
+            private string GetOperationTag(string operationText)
+            {
+                var operationTags = new Dictionary<string, string>
+                {
+                    { "停止容器", "stop" },
+                    { "重启容器", "restart" },
+                    { "查看日志", "logs" },
+                    { "打包Dev环境", "build_dev" },
+                    { "打包Prod环境", "build_prod" },
+                    { "部署到Dev环境", "deploy_dev" },
+                    { "部署到Prod环境", "deploy_prod" },
+                    { "开发环境打包及部署", "build_deploy_dev" },
+                    { "生产环境打包及部署", "build_deploy_prod" }
+                };
+
+                return operationTags.TryGetValue(operationText, out var tag) ? tag : operationText;
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
