@@ -121,92 +121,31 @@ namespace DevToolbox.Forms
 
         private void BtnSSHDocker_Click(object sender, EventArgs e)
         {
-            var sshLoginForm = new SSHLoginForm();
-            sshLoginForm.ShowDialog();
+            var form = new SSHLoginForm();
+            this.Hide();
+            form.ShowDialog();
+            this.Show();
         }
 
         private void BtnDBRestore_Click(object sender, EventArgs e)
         {
-            var dbRestoreForm = new DatabaseRestoreForm();
-            dbRestoreForm.ShowDialog();
+            var form = new DatabaseRestoreForm();
+            this.Hide();
+            form.ShowDialog();
+            this.Show();
         }
 
         private void BtnDeploy_Click(object sender, EventArgs e)
         {
-            var javaDeployForm = new JavaDeployForm();
-            javaDeployForm.ShowDialog();
+            var form = new JavaDeployForm();
+            this.Hide();
+            form.ShowDialog();
+            this.Show();
         }
 
-        private async void BtnCleanup_Click(object sender, EventArgs e)
+        private void BtnCleanup_Click(object sender, EventArgs e)
         {
-
-            const string RAMMAP_PATH = @"D:\software\RAMMap\RAMMap64.exe";
-            if (!File.Exists(RAMMAP_PATH))
-            {
-                MessageBox.Show($"找不到 RAMMap64.exe，请检查路径：{RAMMAP_PATH}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            using (var loadingForm = new LoadingForm(this, "正在清理系统内存...", true))
-            {
-                try
-                {
-                    loadingForm.Show();
-                    Application.DoEvents();
-
-                    // 开始监控内存使用情况
-                    var timer = new System.Windows.Forms.Timer();
-                    timer.Interval = 1000;
-                    timer.Tick += (s, args) =>
-                    {
-                        var memoryStatus = GetMemoryStatus();
-                        double usedPercentage = 100 - (memoryStatus.availablePhysical * 100.0 / memoryStatus.totalPhysical);
-                        loadingForm.UpdateProgress(
-                            (long)(usedPercentage * 100),
-                            10000,
-                            $"内存使用: {usedPercentage:F1}% ({FormatSize(memoryStatus.availablePhysical)} 可用)"
-                        );
-                    };
-                    timer.Start();
-
-                    // 执行所有清理操作
-                    string[] cleanupCommands = { "-Ew", "-Es", "-Em", "-Et", "-E0" };
-                    int totalSteps = cleanupCommands.Length;
-                    int currentStep = 0;
-
-                    foreach (var command in cleanupCommands)
-                    {
-                        currentStep++;
-                        loadingForm.Message = $"正在执行清理操作 ({currentStep}/{totalSteps})...";
-                        
-                        var process = new Process
-                        {
-                            StartInfo = new ProcessStartInfo
-                            {
-                                FileName = RAMMAP_PATH,
-                                Arguments = command,
-                                UseShellExecute = true,
-                                Verb = "runas",
-                                CreateNoWindow = true,
-                                WindowStyle = ProcessWindowStyle.Hidden
-                            }
-                        };
-                        
-                        process.Start();
-                        await Task.Run(() => process.WaitForExit());
-                    }
-
-                    timer.Stop();
-                    timer.Dispose();
-
-                    loadingForm.Close();
-                    MessageBox.Show("内存清理完成！", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"清理过程中发生错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
+            ExecuteCleanup();
         }
 
         // 检查是否以管理员身份运行

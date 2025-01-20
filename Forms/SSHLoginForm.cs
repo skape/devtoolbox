@@ -176,9 +176,6 @@ namespace DevToolbox.Forms
                                     SshClient = null;
                                 }
                             }
-
-                            // 取消关闭登录窗口
-                            e.Cancel = true;
                         }
                         catch (Exception ex)
                         {
