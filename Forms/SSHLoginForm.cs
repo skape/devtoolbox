@@ -159,6 +159,7 @@ namespace DevToolbox.Forms
                             // 创建并显示Docker窗口
                             var dockerForm = new DockerForm(SshClient);
                             dockerForm.ShowDialog();
+                            LoadServerList(); // 刷新服务器列表
 
                             // Docker窗口关闭后，断开SSH连接
                             try
@@ -176,6 +177,9 @@ namespace DevToolbox.Forms
                                     SshClient = null;
                                 }
                             }
+
+                            // 取消窗口关闭，保持SSH登录窗口打开
+                            e.Cancel = true;
                         }
                         catch (Exception ex)
                         {
