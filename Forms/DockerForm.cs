@@ -1513,7 +1513,8 @@ namespace DevToolbox.Forms
                 ExecuteDockerCommand,
                 ShowContainerLogs,
                 ExecuteBuild,
-                Deploy
+                Deploy,
+                sshClient
             );
             batchForm.ShowDialog();
             LoadContainers(); // 刷新容器列表
@@ -1530,6 +1531,7 @@ namespace DevToolbox.Forms
             private Action<string> showContainerLogs;
             private Action<string, string> executeBuild;
             private Func<string, string, Task> deploy;
+            private Renci.SshNet.SshClient sshClient;
 
             public BatchOperationForm(
                 ListView containers, 
@@ -1537,7 +1539,8 @@ namespace DevToolbox.Forms
                 Action<string, string> executeDockerCommand,
                 Action<string> showContainerLogs,
                 Action<string, string> executeBuild,
-                Func<string, string, Task> deploy)
+                Func<string, string, Task> deploy,
+                Renci.SshNet.SshClient sshClient)
             {
                 containerList = containers;
                 contextMenu = menu;
@@ -1545,6 +1548,7 @@ namespace DevToolbox.Forms
                 this.showContainerLogs = showContainerLogs;
                 this.executeBuild = executeBuild;
                 this.deploy = deploy;
+                this.sshClient = sshClient;
                 InitializeUI();
                 LoadContainers();
             }
@@ -1715,7 +1719,7 @@ namespace DevToolbox.Forms
                     {
                         if (operationNode.Checked)
                         {
-                            operations.Add(operationNode.Text);
+                            operations.Add(operationNode.Tag.ToString());
                         }
                     }
 
@@ -1739,7 +1743,7 @@ namespace DevToolbox.Forms
                     confirmMessage.AppendLine("操作顺序：");
                     for (int i = 0; i < operations.Count; i++)
                     {
-                        confirmMessage.AppendLine($"  {i + 1}. {operations[i]}");
+                        confirmMessage.AppendLine($"  {i + 1}. {GetOperationText(operations[i])}");
                     }
                     confirmMessage.AppendLine();
                 }
@@ -1753,44 +1757,253 @@ namespace DevToolbox.Forms
                     this.Enabled = false;
                     try 
                     {
+                        // 按顺序执行每个容器的操作
                         foreach (var (container, operations) in operationsByContainer)
                         {
-                            var containerId = container.Id;
-                            // 按照列表中的顺序执行操作
-                            foreach (var operationText in operations)
+                            // 显示当前正在处理的容器
+                            this.Text = $"批量操作 - 正在处理: {container.Image}";
+                            
+                            foreach (var operation in operations)
                             {
-                                var operation = GetOperationTag(operationText);
-                                switch (operation)
+                                // 显示当前正在执行的操作
+                                this.Text = $"批量操作 - {container.Image} - {GetOperationText(operation)}";
+
+                                // 等待所有上传窗口关闭后再继续下一个操作
+                                while (Application.OpenForms.OfType<Form>().Any(f => 
+                                    f.Text.Contains("正在上传文件") || 
+                                    f.Text.Contains("开发环境部署配置") ||
+                                    f.Text.Contains("生产环境部署配置")))
                                 {
-                                    case "stop":
-                                        executeDockerCommand($"docker stop {containerId}", "停止容器");
-                                        break;
-                                    case "restart":
-                                        executeDockerCommand($"docker restart {containerId}", "重启容器");
-                                        break;
-                                    case "logs":
-                                        showContainerLogs(containerId);
-                                        break;
-                                    case "build_dev":
-                                        executeBuild(containerId, "staging");
-                                        break;
-                                    case "build_prod":
-                                        executeBuild(containerId, "prod");
-                                        break;
-                                    case "deploy_dev":
-                                        await deploy(containerId, "dev");
-                                        break;
-                                    case "deploy_prod":
-                                        await deploy(containerId, "prod");
-                                        break;
-                                    case "build_deploy_dev":
-                                        executeBuild(containerId, "staging");
-                                        await deploy(containerId, "dev");
-                                        break;
-                                    case "build_deploy_prod":
-                                        executeBuild(containerId, "prod");
-                                        await deploy(containerId, "prod");
-                                        break;
+                                    await Task.Delay(500);
+                                    Application.DoEvents();
+                                }
+                                
+                                if (operation == "build_deploy_dev" || operation == "build_deploy_prod")
+                                {
+                                    var env = operation == "build_deploy_dev" ? "staging" : "prod";
+                                    var deployEnv = operation == "build_deploy_dev" ? "dev" : "prod";
+                                    
+                                    // 创建一个TaskCompletionSource来等待整个操作完成
+                                    var operationCompleted = new TaskCompletionSource<bool>();
+                                    
+                                    // 先执行构建
+                                    var buildCommand = $"docker exec {container.Id} yarn build:{env}";
+                                    var cmd = sshClient.CreateCommand(buildCommand);
+                                    
+                                    // 创建日志窗口
+                                    Form logForm = new Form
+                                    {
+                                        Text = $"Build Logs - {container.Image} - {env}",
+                                        Size = new Size(800, 600),
+                                        StartPosition = FormStartPosition.CenterParent
+                                    };
+
+                                    RichTextBox logBox = new RichTextBox
+                                    {
+                                        Dock = DockStyle.Fill,
+                                        ReadOnly = true,
+                                        BackColor = Color.Black,
+                                        ForeColor = Color.LightGreen,
+                                        Font = new Font("Consolas", 10F),
+                                        Multiline = true,
+                                        ScrollBars = RichTextBoxScrollBars.Both
+                                    };
+
+                                    logForm.Controls.Add(logBox);
+                                    logForm.Show();
+
+                                    try 
+                                    {
+                                        var asyncResult = cmd.BeginExecute();
+                                        
+                                        using (var reader = new StreamReader(cmd.OutputStream))
+                                        using (var errorReader = new StreamReader(cmd.ExtendedOutputStream))
+                                        {
+                                            while (!asyncResult.IsCompleted || !reader.EndOfStream || !errorReader.EndOfStream)
+                                            {
+                                                if (!reader.EndOfStream)
+                                                {
+                                                    string line = await reader.ReadLineAsync();
+                                                    if (!string.IsNullOrEmpty(line))
+                                                    {
+                                                        logBox.Invoke((MethodInvoker)delegate
+                                                        {
+                                                            logBox.AppendText(line + Environment.NewLine);
+                                                            logBox.ScrollToCaret();
+                                                        });
+                                                    }
+                                                }
+
+                                                if (!errorReader.EndOfStream)
+                                                {
+                                                    string errorLine = await errorReader.ReadLineAsync();
+                                                    if (!string.IsNullOrEmpty(errorLine))
+                                                    {
+                                                        logBox.Invoke((MethodInvoker)delegate
+                                                        {
+                                                            logBox.SelectionColor = Color.Red;
+                                                            logBox.AppendText(errorLine + Environment.NewLine);
+                                                            logBox.SelectionColor = logBox.ForeColor;
+                                                            logBox.ScrollToCaret();
+                                                        });
+                                                    }
+                                                }
+
+                                                await Task.Delay(100);
+                                            }
+                                        }
+
+                                        cmd.EndExecute(asyncResult);
+
+                                        if (cmd.ExitStatus == 0)
+                                        {
+                                            logBox.Invoke((MethodInvoker)delegate
+                                            {
+                                                logBox.SelectionColor = Color.Green;
+                                                logBox.AppendText("\n\n构建成功完成！\n");
+                                                logBox.SelectionColor = logBox.ForeColor;
+                                            });
+                                            
+                                            // 等待一会儿显示成功消息
+                                            await Task.Delay(1000);
+                                            logForm.Invoke((MethodInvoker)delegate
+                                            {
+                                                logForm.Close();
+                                            });
+                                            
+                                            // 构建成功后执行部署，等待部署完成
+                                            var uploadCompleted = new TaskCompletionSource<bool>();
+                                            
+                                            // 创建一个计时器来检查上传窗口
+                                            var uploadCheckTimer = new System.Windows.Forms.Timer();
+                                            uploadCheckTimer.Interval = 500;
+                                            
+                                            // 标记是否已经开始部署
+                                            bool deployStarted = false;
+                                            
+                                            uploadCheckTimer.Tick += async (s, ev) => {
+                                                var uploadForm = Application.OpenForms.OfType<Form>()
+                                                    .FirstOrDefault(f => f.Text.Contains("正在上传文件"));
+                                                    
+                                                if (!deployStarted)
+                                                {
+                                                    deployStarted = true;
+                                                    try 
+                                                    {
+                                                        await deploy(container.Id, deployEnv);
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        MessageBox.Show($"部署过程发生错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                                        uploadCompleted.TrySetResult(false);
+                                                    }
+                                                }
+                                                
+                                                if (uploadForm == null)
+                                                {
+                                                    // 如果没有上传窗口，并且已经过了2秒（确保窗口真的关闭了）
+                                                    await Task.Delay(2000);
+                                                    if (!Application.OpenForms.OfType<Form>().Any(f => 
+                                                        f.Text.Contains("正在上传文件") || 
+                                                        f.Text.Contains("开发环境部署配置") ||
+                                                        f.Text.Contains("生产环境部署配置")))
+                                                    {
+                                                        uploadCheckTimer.Stop();
+                                                        uploadCompleted.TrySetResult(true);
+                                                    }
+                                                }
+                                            };
+                                            
+                                            // 启动计时器
+                                            uploadCheckTimer.Start();
+                                            
+                                            // 等待上传完成
+                                            await uploadCompleted.Task;
+                                            
+                                            // 标记操作完成
+                                            operationCompleted.SetResult(true);
+                                        }
+                                        else
+                                        {
+                                            logBox.Invoke((MethodInvoker)delegate
+                                            {
+                                                logBox.SelectionColor = Color.Red;
+                                                logBox.AppendText($"\n\n构建失败，退出代码: {cmd.ExitStatus}\n");
+                                                logBox.SelectionColor = logBox.ForeColor;
+                                            });
+                                            operationCompleted.SetResult(false);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logBox.Invoke((MethodInvoker)delegate
+                                        {
+                                            logBox.SelectionColor = Color.Red;
+                                            logBox.AppendText($"\n\n执行命令时发生错误: {ex.Message}\n");
+                                            logBox.SelectionColor = logBox.ForeColor;
+                                        });
+                                        operationCompleted.SetResult(false);
+                                    }
+
+                                    // 等待操作完成
+                                    await operationCompleted.Task;
+                                    
+                                    // 如果操作失败，询问是否继续执行其他操作
+                                    if (!operationCompleted.Task.Result)
+                                    {
+                                        if (MessageBox.Show(
+                                            $"{container.Image} 的操作失败。是否继续执行其他操作？",
+                                            "操作失败",
+                                            MessageBoxButtons.YesNo,
+                                            MessageBoxIcon.Question) == DialogResult.No)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    // 其他操作保持不变
+                                    switch (operation)
+                                    {
+                                        case "stop":
+                                            executeDockerCommand($"docker stop {container.Id}", "停止容器");
+                                            break;
+                                        case "restart":
+                                            executeDockerCommand($"docker restart {container.Id}", "重启容器");
+                                            break;
+                                        case "logs":
+                                            showContainerLogs(container.Id);
+                                            break;
+                                        case "build_dev":
+                                            executeBuild(container.Id, "staging");
+                                            break;
+                                        case "build_prod":
+                                            executeBuild(container.Id, "prod");
+                                            break;
+                                        case "deploy_dev":
+                                            await deploy(container.Id, "dev");
+                                            // 等待部署完成，包括上传过程
+                                            while (Application.OpenForms.OfType<Form>().Any(f => 
+                                                f.Text.Contains("正在上传文件") || 
+                                                f.Text.Contains("开发环境部署配置")))
+                                            {
+                                                await Task.Delay(500);
+                                                Application.DoEvents();
+                                            }
+                                            break;
+                                        case "deploy_prod":
+                                            await deploy(container.Id, "prod");
+                                            // 等待部署完成，包括上传过程
+                                            while (Application.OpenForms.OfType<Form>().Any(f => 
+                                                f.Text.Contains("正在上传文件") || 
+                                                f.Text.Contains("生产环境部署配置")))
+                                            {
+                                                await Task.Delay(500);
+                                                Application.DoEvents();
+                                            }
+                                            break;
+                                    }
                                 }
                             }
                         }
@@ -1799,11 +2012,54 @@ namespace DevToolbox.Forms
                     finally 
                     {
                         this.Enabled = true;
+                        this.Text = "批量操作";
                     }
                 }
             }
 
-            private string GetOperationTag(string operationText)
+            private ToolStripMenuItem FindMenuItemByTag(ToolStripItemCollection items, string tag)
+            {
+                foreach (ToolStripItem item in items)
+                {
+                    if (item is ToolStripMenuItem menuItem)
+                    {
+                        if (GetOperationTag(menuItem.Text) == tag)
+                        {
+                            return menuItem;
+                        }
+                        
+                        if (menuItem.DropDownItems.Count > 0)
+                        {
+                            var found = FindMenuItemByTag(menuItem.DropDownItems, tag);
+                            if (found != null)
+                            {
+                                return found;
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+
+            private string GetOperationText(string tag)
+            {
+                var operationTexts = new Dictionary<string, string>
+                {
+                    { "stop", "停止容器" },
+                    { "restart", "重启容器" },
+                    { "logs", "查看日志" },
+                    { "build_dev", "打包Dev环境" },
+                    { "build_prod", "打包Prod环境" },
+                    { "deploy_dev", "部署到Dev环境" },
+                    { "deploy_prod", "部署到Prod环境" },
+                    { "build_deploy_dev", "开发环境打包及部署" },
+                    { "build_deploy_prod", "生产环境打包及部署" }
+                };
+
+                return operationTexts.TryGetValue(tag, out var text) ? text : tag;
+            }
+
+            private string GetOperationTag(string text)
             {
                 var operationTags = new Dictionary<string, string>
                 {
@@ -1818,7 +2074,7 @@ namespace DevToolbox.Forms
                     { "生产环境打包及部署", "build_deploy_prod" }
                 };
 
-                return operationTags.TryGetValue(operationText, out var tag) ? tag : operationText;
+                return operationTags.TryGetValue(text, out var tag) ? tag : text;
             }
         }
 

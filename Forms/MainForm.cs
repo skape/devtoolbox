@@ -51,7 +51,7 @@ namespace DevToolbox.Forms
             // 创建功能按钮
             var btnSSHDocker = CreateButton("SSH + Docker", 0);
             var btnDBRestore = CreateButton("数据库恢复", 1);
-            var btnDeploy = CreateButton("部署", 2);
+            var btnDeploy = CreateButton("Java部署", 2);
             var btnCleanup = CreateButton("清理", 3);
 
             // 添加按钮点击事件
@@ -139,28 +139,6 @@ namespace DevToolbox.Forms
 
         private async void BtnCleanup_Click(object sender, EventArgs e)
         {
-            // 如果不是管理员权限，重启程序
-            if (!IsRunAsAdministrator())
-            {
-                try
-                {
-                    var startInfo = new ProcessStartInfo
-                    {
-                        FileName = Application.ExecutablePath,
-                        UseShellExecute = true,
-                        Verb = "runas",
-                        Arguments = "--cleanup"
-                    };
-                    Process.Start(startInfo);
-                    Application.Exit();
-                    return;
-                }
-                catch (Exception)
-                {
-                    MessageBox.Show("清理功能需要管理员权限。", "需要权限", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-            }
 
             const string RAMMAP_PATH = @"D:\software\RAMMap\RAMMap64.exe";
             if (!File.Exists(RAMMAP_PATH))
